@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { languages } from '@/languages';
 import { modes } from '@/training/config';
 import type { LanguageId, ModeId, Turn, Evaluation } from '@/types/speaking';
+import type { UiLanguage } from '@/lib/ui-translations';
 
 export type TextProvider = 'openai' | 'deepseek' | 'glm';
 const providerConfig: Record<TextProvider, { key?: string; model: string; url: string; format: 'responses' | 'chat' }> = {
@@ -35,10 +36,11 @@ export async function nextQuestion(provider: TextProvider, language: LanguageId,
 }
 
 const evaluationSchema = z.object({ summary: z.string(), scores: z.array(z.object({ key: z.string(), value: z.number().min(0).max(10), note: z.string() })), strengths: z.array(z.string()), improvements: z.array(z.string()), weaknesses: z.array(z.string()) });
-export async function evaluate(provider: TextProvider, language: LanguageId, mode: ModeId, turns: Turn[]): Promise<Evaluation> {
+export async function evaluate(provider: TextProvider, language: LanguageId, mode: ModeId, turns: Turn[], uiLanguage: UiLanguage = 'en'): Promise<Evaluation> {
   const config = languages[language]; const rubric = modes[mode].rubric || config.rubric;
   const transcript = turns.map(t => `Question: ${t.question}\nAttempt ${t.attempt}: ${t.transcript}`).join('\n');
-  const output = await generate(provider, `${config.evaluationPrompt}\nRubric: ${JSON.stringify(rubric)}. Return ONLY JSON: {"summary":string,"scores":[{"key":string,"value":number 0-10,"note":string}],"strengths":string[],"improvements":string[],"weaknesses":string[]}. Include only rubric keys supported by transcript. Never score pronunciation from a transcript. For IELTS, these are practice indicators, never official bands.`, transcript);
+  const feedbackLanguage = { 'zh-CN': 'Simplified Chinese', en: 'English', 'zh-HK': 'Traditional Chinese as used in Hong Kong', ja: 'Japanese' }[uiLanguage];
+  const output = await generate(provider, `${config.evaluationPrompt}\nRubric: ${JSON.stringify(rubric)}. Write all feedback prose in ${feedbackLanguage}, regardless of the language being practiced. Keep JSON keys and rubric keys in English. Return ONLY JSON: {"summary":string,"scores":[{"key":string,"value":number 0-10,"note":string}],"strengths":string[],"improvements":string[],"weaknesses":string[]}. Include only rubric keys supported by transcript. Never score pronunciation from a transcript. For IELTS, these are practice indicators, never official bands.`, transcript);
   const parsed = evaluationSchema.parse(JSON.parse(output.replace(/^```(?:json)?\s*|\s*```$/g, '')));
   return { ...parsed, scores: parsed.scores.filter(s => s.key !== 'pronunciation' && rubric.some(r => r.key === s.key)).map(s => ({ ...s, label: rubric.find(r => r.key === s.key)!.label })), model: 'ai' };
 }

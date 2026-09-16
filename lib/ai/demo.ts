@@ -1,5 +1,6 @@
 import { languages } from '@/languages';
 import type { Evaluation, LanguageId, ModeId, Turn } from '@/types/speaking';
+import type { UiLanguage } from '@/lib/ui-translations';
 export function demoQuestion(language: LanguageId, mode: ModeId, count: number, topic = ''): string {
   if (mode === 'ielts' && topic.includes('Part 2')) return ['Describe a place you would like to visit. Say where it is, why you want to go, and what you would do there.', 'What makes this place especially interesting to you?'][count % 2];
   if (mode === 'ielts' && topic.includes('Part 3')) return ['Why do people choose to travel to other countries?', 'How might travel change in the future?'][count % 2];
@@ -9,7 +10,13 @@ export function demoQuestion(language: LanguageId, mode: ModeId, count: number, 
   }
   const list = languages[language].fallbackQuestions[mode] || languages[language].fallbackQuestions.daily; return list[count % list.length];
 }
-export function demoEvaluation(language: LanguageId, turns: Turn[]): Evaluation {
+export function demoEvaluation(language: LanguageId, turns: Turn[], uiLanguage: UiLanguage = 'en'): Evaluation {
   const words = turns.map(t => t.transcript.trim()).filter(Boolean); const total = words.reduce((n, t) => n + t.length, 0);
-  return { model: 'demo', summary: language === 'ja' ? 'デモ分析：回答を保存しました。詳しい文法・自然さの評価には AI 接続が必要です。' : 'Demo review: your answers were saved. Connect AI for detailed language feedback.', scores: [], strengths: total ? [language === 'ja' ? `${words.length} 回の回答を完了` : `Completed ${words.length} spoken answer${words.length === 1 ? '' : 's'}`] : [], improvements: [language === 'ja' ? 'AI を接続すると、助詞・活用・敬語を具体的に分析できます。' : 'Connect AI for evidence-based grammar and vocabulary analysis.'], weaknesses: [] };
+  const copy = {
+    en: ['Demo review: your answers were saved. Connect AI for detailed language feedback.', 'Connect AI for evidence-based grammar and vocabulary analysis.', 'Completed'],
+    'zh-CN': ['演示回顾：回答已保存。连接 AI 后可获得详细的语言反馈。', '连接 AI 后，可针对语法和词汇提供有依据的分析。', '已完成'],
+    'zh-HK': ['示範回顧：回答已儲存。連接 AI 後可取得詳細的語言回饋。', '連接 AI 後，可針對文法和詞彙提供有依據的分析。', '已完成'],
+    ja: ['デモレビュー：回答を保存しました。詳しい言語フィードバックには AI 接続が必要です。', 'AI に接続すると、文法と語彙を具体的に分析できます。', '完了した回答：'],
+  }[uiLanguage];
+  return { model: 'demo', summary: copy[0], scores: [], strengths: total ? [`${copy[2]} ${words.length}`] : [], improvements: [copy[1]], weaknesses: [] };
 }
