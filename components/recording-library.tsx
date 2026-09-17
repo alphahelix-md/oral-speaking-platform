@@ -1,12 +1,21 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Download, Play, Trash2, UploadCloud } from 'lucide-react';
-import { deleteAudio, listAudio, type AudioLibraryEntry } from '@/core/audio/store';
+import { Download, Play, RotateCcw, Trash2, UploadCloud } from 'lucide-react';
+import { deleteAudio, listAudio, updateAudioMetadata, type AudioLibraryEntry, type AudioMetadata } from '@/core/audio/store';
+import { recordedAudioToWavChunks } from '@/core/audio/wav';
+import { speechErrors } from '@/lib/speech/ui-copy';
 import type { Session } from '@/types/speaking';
 
 type UiLanguage = 'zh-CN' | 'en' | 'zh-HK' | 'ja';
-type Props = { sessions: Session[]; uiLanguage: UiLanguage; onDeleted: (id: string) => void };
+type Props = { sessions: Session[]; uiLanguage: UiLanguage; accessCode: string; onEditAccessCode: () => void; onDeleted: (id: string) => void };
+
+const recoveryCopy = {
+  'zh-CN': { retry: '重新转写', working: '转写中', editCode: '检查访问码', unknownLanguage: '无法确定这段旧录音的语言。', copied: '已复制', copy: '复制文字' },
+  en: { retry: 'Retry transcription', working: 'Transcribing', editCode: 'Check access code', unknownLanguage: 'The language of this older recording is unknown.', copied: 'Copied', copy: 'Copy transcript' },
+  'zh-HK': { retry: '重新轉寫', working: '轉寫中', editCode: '檢查存取碼', unknownLanguage: '無法確定這段舊錄音的語言。', copied: '已複製', copy: '複製文字' },
+  ja: { retry: '再度文字起こし', working: '文字起こし中', editCode: 'アクセスコードを確認', unknownLanguage: 'この古い録音の言語を特定できません。', copied: 'コピー済み', copy: '文字起こしをコピー' },
+} satisfies Record<UiLanguage, Record<string, string>>;
 
 const copy = {
   'zh-CN': { title: '我的录音', intro: '原始录音保存在当前浏览器。可回放或下载备份。', empty: '还没有录音。完成一次语音回答后会显示在这里。', play: '播放', download: '下载', delete: '删除', confirmDelete: '确定永久删除这段本地录音吗？此操作无法撤销。', unavailable: '录音库暂时无法读取。', deleteFailed: '删除失败，请重试。', upload: '上传录音用于训练（尚未开放）', privacy: '语音转写会发送音频给现有转写服务；录音库不会自动上传音频用于训练。未来训练将单独征求同意。', unknown: '未关联的录音', pending: '尚未提交的回答', size: '文件大小' },
@@ -22,13 +31,18 @@ function extension(type: string): string {
   return 'webm';
 }
 
-export function RecordingLibrary({ sessions, uiLanguage, onDeleted }: Props) {
+export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAccessCode, onDeleted }: Props) {
   const [entries, setEntries] = useState<AudioLibraryEntry[]>([]);
   const [selectedUrl, setSelectedUrl] = useState('');
   const [selectedId, setSelectedId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [transcribingId, setTranscribingId] = useState('');
+  const [transcribingProgress, setTranscribingProgress] = useState('');
+  const [errorCode, setErrorCode] = useState('');
+  const [copiedId, setCopiedId] = useState('');
   const t = copy[uiLanguage];
+  const recovery = recoveryCopy[uiLanguage];
 
   useEffect(() => {
     let active = true;
@@ -69,14 +83,73 @@ export function RecordingLibrary({ sessions, uiLanguage, onDeleted }: Props) {
     } catch { setError(t.deleteFailed); }
   }
 
+  function linkedTurn(id: string) {
+    return sessions.flatMap(session => session.turns.map(turn => ({ session, turn }))).find(item => item.turn.audioId === id);
+  }
+
+  async function retryTranscription(entry: AudioLibraryEntry) {
+    const linked = linkedTurn(entry.id);
+    const language = entry.metadata?.language || linked?.session.language;
+    if (!language) { setError(recovery.unknownLanguage); return; }
+    if (!accessCode) { setError(speechErrors[uiLanguage].betaAccessDenied); setErrorCode('BETA_ACCESS_DENIED'); onEditAccessCode(); return; }
+    const parts = [...(entry.metadata?.transcriptionChunks || [])];
+    setError(''); setErrorCode(''); setTranscribingId(entry.id);
+    try {
+      const chunks = await recordedAudioToWavChunks(entry.blob);
+      if (!chunks.length) throw new Error('EMPTY_TRANSCRIPT');
+      const requestId = 'sp_' + Date.now().toString(36) + '_' + crypto.randomUUID().slice(0, 8);
+      for (const [index, chunk] of chunks.entries()) {
+        if (index in parts) continue;
+        setTranscribingProgress(String(index + 1) + '/' + String(chunks.length));
+        const form = new FormData();
+        form.append('audio', chunk, chunk.name);
+        form.append('language', language);
+        const response = await fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'x-beta-access-code': accessCode, 'x-speech-request-id': requestId, 'x-speech-chunk-index': String(index) },
+          body: form,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(String(data.error || 'TRANSCRIPTION_FAILED'));
+        parts[index] = String(data.text || '').trim();
+        const transcript = parts.filter(Boolean).join(' ');
+        const metadata: Partial<Omit<AudioMetadata, 'trainingConsent'>> = {
+          createdAt: entry.metadata?.createdAt || linked?.turn.createdAt || new Date().toISOString(),
+          language,
+          sessionId: entry.metadata?.sessionId || linked?.session.id,
+          question: entry.metadata?.question || linked?.turn.question,
+          transcriptionChunks: [...parts],
+          transcript,
+        };
+        await updateAudioMetadata(entry.id, metadata);
+        setEntries(items => items.map(item => item.id === entry.id ? {
+          ...item,
+          metadata: { ...item.metadata, ...metadata, trainingConsent: false } as AudioMetadata,
+        } : item));
+      }
+      if (!parts.some(Boolean)) throw new Error('EMPTY_TRANSCRIPT');
+    } catch (failure) {
+      const code = failure instanceof Error ? failure.message : 'TRANSCRIPTION_FAILED';
+      setErrorCode(code);
+      const messages = speechErrors[uiLanguage];
+      const detail = code === 'BETA_ACCESS_DENIED' ? messages.betaAccessDenied : code === 'BETA_DAILY_LIMIT_REACHED' ? messages.betaDailyLimit : code === 'BETA_GUARD_NOT_CONFIGURED' ? messages.betaUnavailable : code === 'GLM_QUOTA_OR_LIMIT' ? messages.glmQuota : code === 'EMPTY_TRANSCRIPT' ? messages.emptyTranscript : messages.transcriptionFailed;
+      setError(parts.some(Boolean) ? messages.partialTranscript + ' ' + detail : detail);
+    } finally { setTranscribingId(''); setTranscribingProgress(''); }
+  }
+
+  async function copyTranscript(value: string, id: string) {
+    try { await navigator.clipboard.writeText(value); setCopiedId(id); }
+    catch { setError(t.unavailable); }
+  }
+
   return <section className="recording-library">
     <div className="page-intro"><span className="section-kicker">ORAL / AUDIO</span><h1>{t.title}</h1><p>{t.intro}</p></div>
     <div className="info-note recording-privacy"><UploadCloud size={18} /><span>{t.privacy}</span></div>
     <button className="recording-upload" disabled><UploadCloud size={17} /> {t.upload}</button>
-    {error && <div className="notice" role="alert">{error}</div>}
+    {error && <div className="notice" role="alert">{error}{errorCode === 'BETA_ACCESS_DENIED' && <button className="recording-code-link" onClick={onEditAccessCode}>{recovery.editCode}</button>}</div>}
     {!loading && !entries.length && <p className="empty-copy recording-empty">{t.empty}</p>}
     <div className="recording-list">{entries.map(entry => {
-      const linked = sessions.flatMap(session => session.turns.map(turn => ({ session, turn }))).find(item => item.turn.audioId === entry.id);
+      const linked = linkedTurn(entry.id);
       const createdAt = entry.metadata?.createdAt || linked?.turn.createdAt;
       const question = entry.metadata?.question || linked?.turn.question || t.unknown;
       return <article className="recording-card" key={entry.id}>
@@ -87,8 +160,10 @@ export function RecordingLibrary({ sessions, uiLanguage, onDeleted }: Props) {
         <div className="turn-actions">
           <button onClick={() => play(entry)}><Play size={15} /> {t.play}</button>
           <button onClick={() => download(entry)}><Download size={15} /> {t.download}</button>
-          <button onClick={() => remove(entry.id)}><Trash2 size={15} /> {t.delete}</button>
+          <button onClick={() => retryTranscription(entry)} disabled={Boolean(transcribingId)}><RotateCcw size={15} /> {transcribingId === entry.id ? recovery.working + ' ' + transcribingProgress : recovery.retry}</button>
+          <button onClick={() => remove(entry.id)} disabled={Boolean(transcribingId)}><Trash2 size={15} /> {t.delete}</button>
         </div>
+        {(entry.metadata?.transcript || linked?.turn.transcript) && <button className="recording-copy" onClick={() => copyTranscript(entry.metadata?.transcript || linked?.turn.transcript || '', entry.id)}>{copiedId === entry.id ? recovery.copied : recovery.copy}</button>}
         {selectedId === entry.id && selectedUrl && <audio controls autoPlay src={selectedUrl} className="audio-player" />}
       </article>;
     })}</div>

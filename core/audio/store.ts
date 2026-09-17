@@ -10,6 +10,7 @@ export type AudioMetadata = {
   sessionId?: string;
   turnId?: string;
   transcript?: string;
+  transcriptionChunks?: string[];
   // Reserved for a future, separate opt-in upload flow. Never enabled by local recording.
   trainingConsent: false;
 };

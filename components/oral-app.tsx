@@ -37,6 +37,13 @@ const uiCopy: Record<UiLanguage, Record<string, string>> = {
 const iconMap = { ielts: BookOpen, daily: AudioLines, scenario: Target, topic: Sparkles, 'free-talk': Mic, toefl: BookOpen, interview: UserRound, weakness: Target };
 const formatTime = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
 const downloadAudioLabel: Record<UiLanguage, string> = { 'zh-CN': '下载这段录音', en: 'Download this recording', 'zh-HK': '下載這段錄音', ja: 'この録音をダウンロード' };
+const accessCodeReminder: Record<UiLanguage, string> = {
+  'zh-CN': '测试访问码缺失或被拒绝，服务器无法转写。请重新填写后点“重新分析”。',
+  en: 'Test access code is missing or rejected. Re-enter it, then retry analysis.',
+  'zh-HK': '測試存取碼缺失或遭拒，伺服器無法轉寫。請重新填寫後再分析。',
+  ja: 'テストアクセスコードが未入力か拒否されました。再入力してから再分析してください。',
+};
+const editAccessCodeLabel: Record<UiLanguage, string> = { 'zh-CN': '填写访问码', en: 'Enter access code', 'zh-HK': '填寫存取碼', ja: 'アクセスコードを入力' };
 const localRecordingDisclosure: Record<UiLanguage, string> = {
   'zh-CN': '停止录音后，原音会保存在此浏览器；转写时可能发送至语音服务。可在“我的录音”下载或删除。',
   en: 'Original audio is saved in this browser when you stop. Transcription may send it to a speech service. Download or delete it in My recordings.',
@@ -52,6 +59,7 @@ export function OralApp() {
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>('en'); const [theme, setTheme] = useState<Theme>('light'); const [settingsOpen, setSettingsOpen] = useState(false); const [draftUiLanguage, setDraftUiLanguage] = useState<UiLanguage>('en'); const [draftTheme, setDraftTheme] = useState<Theme>('light'); const [textProvider, setTextProvider] = useState<TextProvider>('deepseek'); const [accessCode, setAccessCode] = useState(''); const [draftTextProvider, setDraftTextProvider] = useState<TextProvider>('deepseek'); const [draftAccessCode, setDraftAccessCode] = useState('');
   const recorder = useRef<AudioRecorder | null>(null); const browserTranscriber = useRef<BrowserTranscriber | null>(null); const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingLock = useRef(false); const stopLock = useRef(false); const analysisLock = useRef(false); const submitLock = useRef(false); const evaluationLock = useRef(false);
+  const transcriptionProgress = useRef<{ blob: Blob; parts: string[] } | null>(null);
   const [audioMetrics, setAudioMetrics] = useState<AudioMetrics | null>(null); const [transcriptResult, setTranscriptResult] = useState<TranscriptResult | null>(null); const [processingStage, setProcessingStage] = useState('');
   const [speechDiagnostic, setSpeechDiagnostic] = useState<SpeechDiagnostic>({}); const speechRequestId = useRef(''); const speechRequestCount = useRef(0);
   useEffect(() => { setSessions(getSessions()); }, []);
@@ -138,7 +146,7 @@ export function OralApp() {
       const next = new AudioRecorder(language);
       await next.start();
       recorder.current = next;
-      setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setTranscript(''); setSeconds(0); setPendingAudioId(null); setAudioSaveFailed(false);
+      setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setTranscript(''); setSeconds(0); setPendingAudioId(null); setAudioSaveFailed(false); transcriptionProgress.current = null;
       const freeTranscriber = new BrowserTranscriber();
       browserTranscriber.current = freeTranscriber;
       const freeStarted = browserTranscriptionSupported() && freeTranscriber.start(language, text => { setTranscript(text); setTranscriptResult({ text, language, provider: 'browser-speech-recognition' }); });
@@ -155,14 +163,16 @@ export function OralApp() {
   async function analyzeAudio(blob: Blob) {
     if (analysisLock.current) return;
     analysisLock.current = true; setBusy(true); setProcessingStage(voice.transcribing);
+    const parts = transcriptionProgress.current?.blob === blob ? [...transcriptionProgress.current.parts] : [];
+    transcriptionProgress.current = { blob, parts };
     const requestId = speechRequestId.current || `sp_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
     speechRequestId.current = requestId;
     setSpeechDiagnostic(previous => ({ ...previous, requestId, uploadStatus: 'converting audio' }));
     try {
       const chunks = await recordedAudioToWavChunks(blob);
       if (!chunks.length) throw new Error('EMPTY_AUDIO');
-      const parts: string[] = [];
       for (const [index, chunk] of chunks.entries()) {
+        if (index in parts) continue;
         speechRequestCount.current += 1;
         const form = new FormData();
         form.append('audio', chunk, chunk.name); form.append('language', language);
@@ -180,7 +190,9 @@ export function OralApp() {
         setSpeechDiagnostic(previous => ({ ...previous, serverReceived: Boolean(data.received), serverFileSize: data.received?.fileSize, serverMime: data.received?.mimeType, provider: data.provider, errorCode: data.error, requestId: data.requestId || requestId }));
         if (process.env.NEXT_PUBLIC_SPEECH_DEBUG === 'true') console.info('[SPEECH_RESPONSE]', { requestId, chunkIndex: index, httpStatus: response.status, durationMs: duration, errorCode: data.error, serverReceived: Boolean(data.received) });
         if (!response.ok) throw new Error(String(data.error || 'TRANSCRIPTION_FAILED'));
-        if (data.text) parts.push(String(data.text).trim());
+        parts[index] = String(data.text || '').trim();
+        transcriptionProgress.current = { blob, parts: [...parts] };
+        setTranscript(parts.filter(Boolean).join(' '));
       }
       const text = parts.join(' ').trim();
       if (!text) throw new Error('EMPTY_TRANSCRIPT');
@@ -189,7 +201,8 @@ export function OralApp() {
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'TRANSCRIPTION_FAILED';
       setSpeechDiagnostic(previous => ({ ...previous, uploadStatus: 'error', errorCode: reason }));
-      setNotice(reason === 'GLM_NOT_CONFIGURED' ? speechErrors[uiLanguage].glmMissing : reason === 'GLM_KEY_INVALID' ? speechErrors[uiLanguage].glmInvalid : reason === 'GLM_QUOTA_OR_LIMIT' ? speechErrors[uiLanguage].glmQuota : reason === 'EMPTY_TRANSCRIPT' ? speechErrors[uiLanguage].emptyTranscript : speechErrors[uiLanguage].transcriptionFailed);
+      const detail = reason === 'BETA_DAILY_LIMIT_REACHED' ? speechErrors[uiLanguage].betaDailyLimit : reason === 'BETA_ACCESS_DENIED' ? speechErrors[uiLanguage].betaAccessDenied : reason === 'BETA_GUARD_NOT_CONFIGURED' ? speechErrors[uiLanguage].betaUnavailable : reason === 'GLM_NOT_CONFIGURED' ? speechErrors[uiLanguage].glmMissing : reason === 'GLM_KEY_INVALID' ? speechErrors[uiLanguage].glmInvalid : reason === 'GLM_QUOTA_OR_LIMIT' ? speechErrors[uiLanguage].glmQuota : reason === 'EMPTY_TRANSCRIPT' ? speechErrors[uiLanguage].emptyTranscript : speechErrors[uiLanguage].transcriptionFailed;
+      setNotice(parts.some(Boolean) ? `${speechErrors[uiLanguage].partialTranscript} ${detail}` : detail);
     } finally {
       analysisLock.current = false; setBusy(false); setProcessingStage('');
       setSession(s => s && speakingReducer(s, { type: 'STATUS', status: 'listening' }));
@@ -305,6 +318,7 @@ export function OralApp() {
     <main className={`main-content ${page === 'speaking' || page === 'result' ? 'full-height' : ''}`}>
       {(page === 'progress' || page === 'profile' || page === 'recordings') && <button className="text-back" onClick={goBack}><ArrowLeft size={18} /> {extra.back}</button>}
       {page === 'speaking' && audioSaveFailed && <div className="notice" role="alert">{text.audioSaveFailed}{audioUrl && <a className="unsaved-download" href={audioUrl} download={`oral-unsaved.${audio?.type.includes('mp4') ? 'm4a' : audio?.type.includes('ogg') ? 'ogg' : 'webm'}`}>{downloadAudioLabel[uiLanguage]}</a>}</div>}
+      {page === 'speaking' && (!accessCode || speechDiagnostic.errorCode === 'BETA_ACCESS_DENIED') && <div className="notice access-code-reminder" role="status">{accessCodeReminder[uiLanguage]} <button type="button" onClick={openSettings}>{editAccessCodeLabel[uiLanguage]}</button></div>}
       {page === 'home' && <><div className="hero"><div className="eyebrow"><span className="live-dot" /> {text.daily}</div><h1>{text.voice}<br /><em>{text.further}</em></h1><p>{text.intro}</p><div className="hero-art" aria-hidden="true"><div className="art-ring ring-one" /><div className="art-ring ring-two" /><AudioLines size={56} strokeWidth={1.5} /></div></div><div className="section-head"><div><span className="section-kicker">{text.begin}</span><h2>{text.choose}</h2></div><span className="section-number">01 / 02</span></div><div className="language-list">{(['en', 'ja'] as const).map(id => <button className={`language-card ${id}`} key={id} onClick={() => chooseLanguage(id)}><span className="language-symbol">{languages[id].flag}</span><span className="language-copy"><strong>{studyName(id)} <span className="native-name">{id === 'ja' && uiLanguage !== 'ja' ? '日本語' : ''}</span></strong><small>{id === 'en' ? extra.enLearn : extra.jaLearn}</small></span><span className="round-arrow"><ArrowRight size={19} /></span></button>)}</div><div className="quick-stats"><div><span>{text.journey}</span><strong>{stats.sessions.toString().padStart(2, '0')}</strong><small>{text.sessions}</small></div><div><span>&nbsp;</span><strong>{stats.minutes.toString().padStart(2, '0')}</strong><small>{text.minutes}</small></div><div><span>&nbsp;</span><strong>—</strong><small>{text.streak}</small></div></div><p className="fine-print">* {extra.streakNote}</p>{sessions.length > 0 && <><div className="section-head compact"><h2>{extra.resume}</h2></div><button className="recent-card" onClick={() => openSession(sessions[0])}><span className="recent-icon">{languages[sessions[0].language].flag}</span><span><strong>{modeText(sessions[0].mode).title}</strong><small>{new Date(sessions[0].startedAt).toLocaleDateString(dateLocale)} · {sessions[0].turns.length} {extra.answers}</small></span><ChevronRight size={18} /></button></>}</>}
       {page === 'practice' && <><button className="text-back" onClick={goBack}><ArrowLeft size={18} /> {extra.back}</button><div className="page-intro"><span className="section-kicker">{config.flag} / {config.nativeName.toUpperCase()}</span><h1>{extra.today}<br /><em>{extra.todayEm}</em></h1><p>{extra.chooseSpace}</p></div><div className="language-switch"><button className={language === 'en' ? 'selected' : ''} onClick={() => chooseLanguage('en')}>{extra.english}</button><button className={language === 'ja' ? 'selected' : ''} onClick={() => chooseLanguage('ja')}>{extra.japanese}</button></div><div className="mode-list">{config.modes.map(id => { const item = modes[id]; const Icon = iconMap[id]; return <button key={id} disabled={!item.enabled} className={`mode-card ${!item.enabled ? 'disabled' : ''}`} onClick={() => chooseMode(id)}><span className="mode-icon"><Icon size={23} strokeWidth={1.8} /></span><span className="mode-copy"><strong>{modeText(id).title}</strong><small>{modeText(id).short}</small></span>{item.enabled ? <ChevronRight size={19} /> : <span className="soon">{extra.soon}</span>}</button>; })}</div>{language === 'ja' && <div className="info-note"><CircleHelp size={18} /><span>{extra.jlptNote}</span></div>}</>}
       {page === 'setup' && <><button className="text-back" onClick={goBack}><ArrowLeft size={18} /> {extra.back}</button><div className="page-intro"><span className="section-kicker">{extra.personalize}</span><h1>{extra.makeMoment}<br /><em>{extra.momentEm}</em></h1><p>{extra.choices}</p></div><div className="setup-panel"><div className="setup-mode"><span className="mode-icon"><Settings2 size={22} /></span><span><small>{extra.selected}</small><strong>{modeText(mode).title}</strong></span></div><label className="field-label" htmlFor="level">{extra.level}</label><select id="level" value={level} onChange={e => setLevel(e.target.value)}>{config.levels.map(item => <option key={item} value={item}>{levelUi[uiLanguage][item] || item}</option>)}</select><label className="field-label" htmlFor="topic">{extra.focus}</label><select id="topic" value={topic} onChange={e => setTopic(e.target.value)}>{(config.topics[mode] || config.topics.daily).map(item => <option key={item} value={item}>{topicLabel(item)}</option>)}</select><div className="session-details"><span><Clock3 size={16} /> {extra.minutesRange}</span><span><Mic size={16} /> {extra.voiceFirst}</span></div></div><div className="info-note"><Sparkles size={18} /><span>{modeText(mode).description}</span></div><button className="primary-button" onClick={startSession}>{extra.start} <ArrowRight size={19} /></button><p className="center-note">{extra.micNote}</p></>}
@@ -313,7 +327,7 @@ export function OralApp() {
       {page === 'progress' && <><div className="page-intro progress-intro"><span className="section-kicker">{extra.bigPicture}</span><h1>{extra.seeProgress}<br /><em>{extra.progressEm}</em></h1><p>{extra.confidence}</p></div><div className="language-switch three"><button className={tab === 'all' ? 'selected' : ''} onClick={() => setTab('all')}>{extra.overall}</button><button className={tab === 'en' ? 'selected' : ''} onClick={() => setTab('en')}>{extra.english}</button><button className={tab === 'ja' ? 'selected' : ''} onClick={() => setTab('ja')}>{extra.japanese}</button></div><div className="progress-grid"><div><Clock3 size={20} /><strong>{currentStats.minutes}</strong><span>{extra.minutesSpoken}</span></div><div><AudioLines size={20} /><strong>{currentStats.sessions}</strong><span>{extra.sessionCount}</span></div><div><BarChart3 size={20} /><strong>{currentStats.average === null ? '—' : currentStats.average}</strong><span>{extra.aiAverage}</span></div></div><div className="section-head compact"><h2>{extra.focusAreas}</h2></div>{currentStats.weaknesses.length ? <div className="chip-list">{currentStats.weaknesses.map(item => <span key={item}>{item}</span>)}</div> : <div className="empty-state"><Target size={25} /><strong>{extra.noFocus}</strong><p>{extra.focusHint}</p></div>}<div className="section-head compact"><h2>{extra.recent}</h2></div>{sessions.filter(s => tab === 'all' || s.language === tab).length ? sessions.filter(s => tab === 'all' || s.language === tab).slice(0, 8).map(item => <button className="recent-card" key={item.id} onClick={() => openSession(item)}><span className="recent-icon">{languages[item.language].flag}</span><span><strong>{modeText(item.mode).title}</strong><small>{new Date(item.startedAt).toLocaleDateString(dateLocale)} · {item.turns.length} {extra.answers}</small></span><ChevronRight size={18} /></button>) : <p className="empty-copy">{extra.firstSession}</p>}</>}
       {page === 'profile' && <><div className="page-intro"><span className="section-kicker">{extra.yourSpace}</span><h1>{extra.personal}<br /><em>{extra.personalEm}</em></h1><p>{extra.localProfile}</p></div><div className="profile-card"><span className="profile-avatar"><UserRound size={28} /></span><div><strong>{extra.guest}</strong><small>{extra.noAccount}</small></div></div><div className="section-head compact"><h2>{extra.languageProfiles}</h2></div>{(['en', 'ja'] as const).map(id => <div className="profile-language" key={id}><span className="recent-icon">{languages[id].flag}</span><span><strong>{studyName(id)}</strong><small>{getStats(sessions, id).sessions} {extra.deviceSessions}</small></span></div>)}<div className="info-note"><CircleHelp size={18} /><span>{extra.historyNote}</span></div><div className="section-head compact"><h2>{extra.about}</h2></div><p className="about-copy">{extra.aboutCopy}</p></>}
       {page === 'profile' && <button className="recent-card recording-entry" onClick={() => navigate('recordings')}><span className="recent-icon"><AudioLines size={21} /></span><span><strong>{text.recordings}</strong><small>{extra.historyNote}</small></span><ChevronRight size={18} /></button>}
-      {page === 'recordings' && <RecordingLibrary sessions={sessions} uiLanguage={uiLanguage} onDeleted={recordingDeleted} />}
+      {page === 'recordings' && <RecordingLibrary sessions={sessions} uiLanguage={uiLanguage} accessCode={accessCode} onEditAccessCode={openSettings} onDeleted={recordingDeleted} />}
       {page === 'setup' && <p className="center-note recording-disclosure">{localRecordingDisclosure[uiLanguage]}</p>}
     </main>
     {page !== 'speaking' && page !== 'result' && <nav className="bottom-nav" aria-label={extra.navigation}>{([{ id: 'home', label: text.home, Icon: Home }, { id: 'practice', label: text.practice, Icon: Headphones }, { id: 'progress', label: text.progress, Icon: BarChart3 }, { id: 'profile', label: text.profile, Icon: UserRound }] as const).map(item => <button key={item.id} onClick={() => navigate(item.id)} className={page === item.id || page === 'setup' && item.id === 'practice' ? 'active' : ''}><item.Icon size={21} strokeWidth={1.8} /><span>{item.label}</span></button>)}</nav>}
