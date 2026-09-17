@@ -57,3 +57,10 @@ h1 em { font-style:normal; color:var(--accent); font-weight:400; }
 .profile-card { background:#e3eee2; border-radius:17px; padding:19px; display:flex; gap:13px; align-items:center; margin-top:30px; }.profile-avatar { height:51px; width:51px; display:grid; place-items:center; color:#477a57; background:#fff; border-radius:15px; }.profile-card div,.profile-language > span:nth-child(2) { display:grid; gap:5px; }.profile-card strong,.profile-language strong { font-size:13px; }.profile-card small,.profile-language small { color:#8a9f8e; font-size:10px; }.profile-language { display:flex; gap:12px; align-items:center; background:#fff; border:1px solid var(--line); border-radius:13px; padding:12px; margin-bottom:9px; }.profile-language .recent-icon { width:42px; height:42px; font-size:11px; }.about-copy { color:#829386; font-size:12px; line-height:1.6; }
 @media (max-width:360px) { .main-content { padding-left:18px; padding-right:18px; }.hero h1,.page-intro h1,.result-intro h1 { font-size:35px; }.hero-art { right:-52px; }.question-card h2 { font-size:19px; } }
 @media (max-width:420px) { .hero-art { width:145px; height:145px; right:-35px; bottom:-27px; }.hero-art svg { width:48px; }.hero h1 { font-size:38px; }.hero p { max-width:190px; } }
+.settings-backdrop { padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
+.settings-sheet { display:flex; flex-direction:column; max-height:calc(100vh - 24px); max-height:calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); min-height:0; overflow:hidden; padding:0; }
+.settings-head { flex:none; padding:20px 20px 12px; }
+.settings-scroll { min-height:0; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding:0 20px 8px; }
+.settings-scroll .preference-module:first-child { margin-top:4px; }
+.settings-footer { flex:none; padding:12px 20px 20px; border-top:1px solid var(--line); background:var(--cream); }
+.settings-footer .primary-button { margin:0; width:100%; }
