@@ -2,8 +2,8 @@ import { languages } from '@/languages';
 import type { Evaluation, LanguageId, ModeId, Turn } from '@/types/speaking';
 import type { UiLanguage } from '@/lib/ui-translations';
 import { ieltsQuestionAt } from '@/exams/ielts/plan';
-export function demoQuestion(language: LanguageId, mode: ModeId, count: number, topic = ''): string {
-  if (mode === 'ielts') return ieltsQuestionAt(topic, count);
+export function demoQuestion(language: LanguageId, mode: ModeId, count: number, topic = '', setId?: string): string {
+  if (mode === 'ielts') return ieltsQuestionAt(topic, count, setId);
   if (language === 'ja' && mode === 'scenario') {
     const scenarios: Record<string, string[]> = { 'コンビニ': ['いらっしゃいませ。何をお探しですか。', 'ほかに何かご入用ですか。'], 'レストラン': ['いらっしゃいませ。ご注文はお決まりですか。', 'お飲み物はいかがですか。'], '駅': ['どちらまで行かれますか。', '片道と往復、どちらになさいますか。'], 'ホテル': ['いらっしゃいませ。ご予約のお名前を教えていただけますか。', '何泊のご予定ですか。'], '職場': ['今日の予定を教えていただけますか。', 'その仕事はいつまでに終わりそうですか。'] };
     return (scenarios[topic] || scenarios['コンビニ'])[count % 2];

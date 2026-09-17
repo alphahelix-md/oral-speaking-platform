@@ -1,3 +1,5 @@
+import { ieltsQuestionSet } from './bank';
+
 export const IELTS_FULL_MOCK = 'Full mock · Parts 1–3';
 export const IELTS_PART_1 = 'Part 1 · Familiar topics';
 export const IELTS_PART_2 = 'Part 2 · Long turn';
@@ -12,25 +14,6 @@ const plans: Record<string, readonly IeltsPart[]> = {
   [IELTS_PART_3]: [3, 3, 3],
 };
 
-// Original practice prompts: data shape inspired by the referenced projects,
-// not copied from their question banks.
-export const ieltsQuestionBank: Record<IeltsPart, readonly string[]> = {
-  1: [
-    'Do you work or study?',
-    'What do you enjoy most about your usual day?',
-    'How do you normally spend your weekends?',
-    'Is there a place in your hometown you often visit?',
-  ],
-  2: [
-    'Describe a place you would like to visit. Say where it is, how you learned about it, what you would do there, and explain why you want to visit it.',
-  ],
-  3: [
-    'Why do people choose to travel to unfamiliar places?',
-    'How can tourism change a local community?',
-    'Do you think virtual experiences will replace some travel in the future?',
-  ],
-};
-
 export function ieltsPlan(topic: string): readonly IeltsPart[] {
   return plans[topic] || plans[IELTS_FULL_MOCK];
 }
@@ -40,12 +23,14 @@ export function ieltsPartAt(topic: string, questionIndex: number): IeltsPart {
   return plan[Math.min(Math.max(0, questionIndex), plan.length - 1)];
 }
 
-export function ieltsQuestionAt(topic: string, questionIndex: number): string {
+export function ieltsQuestionAt(topic: string, questionIndex: number, setId?: string): string {
   const plan = ieltsPlan(topic);
   const boundedIndex = Math.min(Math.max(0, questionIndex), plan.length - 1);
   const part = plan[boundedIndex];
   const ordinal = plan.slice(0, boundedIndex + 1).filter(value => value === part).length - 1;
-  const questions = ieltsQuestionBank[part];
+  const set = ieltsQuestionSet(setId);
+  if (part === 2) return set.part2;
+  const questions = part === 1 ? set.part1 : set.part3;
   return questions[ordinal % questions.length];
 }
 

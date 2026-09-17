@@ -10,6 +10,7 @@ import { AudioRecorder } from '@/core/audio/recorder';
 import { getAudio, saveAudio } from '@/core/audio/store';
 import { demoEvaluation, demoQuestion } from '@/lib/ai/demo';
 import { IELTS_PART_1, IELTS_PART_2, IELTS_PART_3, ieltsPartAt, ieltsPartChangesAfter, ieltsPlan } from '@/exams/ielts/plan';
+import { ieltsQuestionSets } from '@/exams/ielts/bank';
 import type { LanguageId, ModeId, Session, Turn } from '@/types/speaking';
 
 type Page = 'home' | 'practice' | 'setup' | 'speaking' | 'result' | 'progress' | 'profile';
@@ -85,7 +86,19 @@ export function OralApp() {
   }
   function chooseLanguage(id: LanguageId) { setLanguage(id); setLevel(id === 'ja' ? 'Beginner' : 'Intermediate'); setMode('daily'); setTopic(languages[id].topics.daily[0]); navigate('practice'); }
   function chooseMode(id: ModeId) { if (!modes[id].enabled) return; setMode(id); setTopic(config.topics[id]?.[0] || config.topics.daily[0]); navigate('setup'); }
-  function startSession() { const question = demoQuestion(language, mode, 0, topic); setSession(createSession(language, mode, level, topic, question)); setTranscript(''); setAudio(null); setSeconds(0); setNotice(''); setRetryExamPart(undefined); navigate('speaking'); }
+  function startSession() {
+    const priorIelts = sessions.filter(item => item.mode === 'ielts').length;
+    const questionSet = mode === 'ielts' ? ieltsQuestionSets[priorIelts % ieltsQuestionSets.length] : undefined;
+    const question = demoQuestion(language, mode, 0, topic, questionSet?.id);
+    const created = createSession(language, mode, level, topic, question);
+    setSession(questionSet ? { ...created, examSetId: questionSet.id } : created);
+    setTranscript('');
+    setAudio(null);
+    setSeconds(0);
+    setNotice('');
+    setRetryExamPart(undefined);
+    navigate('speaking');
+  }
   function speakQuestion() { if (!('speechSynthesis' in window) || !session) return; speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(session.question); utterance.lang = languages[session.language].speechLocale; utterance.rate = session.language === 'ja' && session.level === 'Beginner' ? 0.83 : 0.95; speechSynthesis.speak(utterance); }
   async function beginRecording() { setNotice(''); try { const next = new AudioRecorder(); await next.start(); recorder.current = next; setAudio(null); setTranscript(''); setSeconds(0); setRecording(true); setPaused(false); setSession(s => s && speakingReducer(s, { type: 'STATUS', status: 'recording' })); timer.current = setInterval(() => setSeconds(n => n + 1), 1000); } catch { setNotice(extra.micUnavailable); } }
   function togglePause() { if (!recorder.current) return; if (paused) recorder.current.resume(); else recorder.current.pause(); setPaused(!paused); }
@@ -106,7 +119,7 @@ export function OralApp() {
         await finishSession(updated);
         return;
       }
-      let question = demoQuestion(language, mode, updated.turns.length, topic);
+      let question = demoQuestion(language, mode, updated.turns.length, topic, session.examSetId);
       if (mode === 'ielts' && ieltsPartChangesAfter(topic, updated.turns.length)) {
         setSession(s => s && speakingReducer(s, { type: 'QUESTION', question }));
         return;
@@ -115,7 +128,7 @@ export function OralApp() {
         const response = await fetch('/api/ai', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(accessCode ? { 'x-beta-access-code': accessCode } : {}) },
-          body: JSON.stringify({ action: 'next', provider: textProvider, language, mode, level, topic, turns: updated.turns }),
+          body: JSON.stringify({ action: 'next', provider: textProvider, language, mode, level, topic, questionSetId: session.examSetId, turns: updated.turns }),
         });
         const data = await response.json();
         if (response.ok && data.question) question = data.question;

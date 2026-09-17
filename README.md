@@ -12,7 +12,7 @@ Copy `.env.example` to `.env.local` and set `OPENAI_API_KEY` for server-side spe
 
 Sessions persist in browser localStorage; audio blobs persist in IndexedDB on the same device. No sign-in or cross-device sync yet. Clearing site data deletes them. `supabase/schema.sql` is a future authenticated sync schema, not a live integration. Set the optional Supabase environment variables only after implementing auth and owner-scoped policies. Never expose a service-role key in browser code.
 
-IELTS practice now has a full Part 1–3 path plus focused single-part paths. A small original question bank controls part transitions; AI follow-ups stay within the active part. Reports mark each question's part. This is a practice flow, not an official timed mock or band score.
+IELTS practice has a full Part 1–3 path plus focused single-part paths. Five original themed sets contain 40 practice prompts; new sessions rotate sets and retain their choice in local history. The bank supplies offline/demo questions and part transitions; AI follow-ups stay within the active part and set theme. Reports mark each question's part. See [the question audit](exams/ielts/QUESTION_AUDIT.md). This is practice, not an official timed mock or band score.
 
 Deploy as a Next.js app on Vercel with `OPENAI_API_KEY` set as a server environment variable. Use HTTPS. Open in Safari/Chrome and choose Add to Home Screen/Install App. The service worker caches the shell for limited offline use; AI calls need network. The SVG app icon is a placeholder.
 
