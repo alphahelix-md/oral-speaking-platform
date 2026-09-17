@@ -69,3 +69,19 @@ h1 em { font-style:normal; color:var(--accent); font-weight:400; }
 .speech-metric-item p { margin: 8px 0 0; line-height: 1.55; }
 .speech-debug-panel { margin: 16px 0; padding: 14px; border: 1px solid currentColor; border-radius: 12px; font-size: 12px; overflow-wrap: anywhere; }
 .speech-debug-panel pre { white-space: pre-wrap; font-size: 11px; }
+.recording-entry { margin-top: 22px; }
+.recording-entry small { line-height: 1.45; }
+.recording-library .page-intro h1 { margin-top: 12px; }
+.recording-library .page-intro p { max-width: none; }
+.recording-privacy { margin-top: 22px; }
+.recording-upload { width: 100%; min-height: 44px; margin: 13px 0 24px; border: 1px dashed var(--line); border-radius: 12px; background: var(--soft); color: var(--muted); display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; }
+.recording-list { display: grid; gap: 12px; }
+.recording-card { padding: 17px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); display: grid; gap: 9px; overflow-wrap: anywhere; }
+.recording-card > strong { font-size: 13px; line-height: 1.5; }
+.recording-card > small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.recording-size { color: var(--muted); font-size: 10px; }
+.recording-card .turn-actions { margin-top: 6px; gap: 15px; }
+.recording-card .audio-player { margin: 4px 0 0; }
+.recording-empty { margin-top: 12px; }
+.unsaved-download { display: block; margin-top: 8px; color: var(--green); font-weight: 800; }
+.recording-disclosure { line-height: 1.5; color: var(--muted); }
