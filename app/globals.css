@@ -64,3 +64,6 @@ h1 em { font-style:normal; color:var(--accent); font-weight:400; }
 .settings-scroll .preference-module:first-child { margin-top:4px; }
 .settings-footer { flex:none; padding:12px 20px 20px; border-top:1px solid var(--line); background:var(--cream); }
 .settings-footer .primary-button { margin:0; width:100%; }
+.speech-result { display: grid; gap: 16px; margin: 16px 0 28px; }
+.speech-metric-item { padding: 12px 0; border-top: 1px solid var(--border, #dce6de); overflow-wrap: anywhere; }
+.speech-metric-item p { margin: 8px 0 0; line-height: 1.55; }

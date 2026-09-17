@@ -47,7 +47,7 @@ export const levelUi: Record<UiLanguage, Record<string, string>> = {
 };
 
 export const scoreUi: Record<UiLanguage, Record<string, string>> = {
-  en: {}, 'zh-CN': { fluency:'流利度与连贯性', vocabulary:'词汇', grammar:'语法', naturalness:'自然度', appropriateness:'得体程度' },
-  'zh-HK': { fluency:'流利度與連貫性', vocabulary:'詞彙', grammar:'語法', naturalness:'自然度', appropriateness:'得體程度' },
-  ja: { fluency:'流暢さ', vocabulary:'語彙', grammar:'文法', naturalness:'自然さ', appropriateness:'適切さ' },
+  en: {}, 'zh-CN': { coherence:'连贯性', taskResponse:'切题程度', particleUsage:'助词使用', conjugation:'活用', register:'语体与礼貌程度', vocabulary:'词汇', grammar:'语法', naturalness:'自然度', appropriateness:'得体程度' },
+  'zh-HK': { coherence:'連貫性', taskResponse:'切題程度', particleUsage:'助詞使用', conjugation:'活用', register:'語體與禮貌程度', vocabulary:'詞彙', grammar:'語法', naturalness:'自然度', appropriateness:'得體程度' },
+  ja: { coherence:'一貫性', taskResponse:'課題への応答', particleUsage:'助詞', conjugation:'活用', register:'文体と敬語', vocabulary:'語彙', grammar:'文法', naturalness:'自然さ', appropriateness:'適切さ' },
 };

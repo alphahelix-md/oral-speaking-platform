@@ -5,3 +5,6 @@
 Flow: language + mode + level + topic => session => record/stop => `/api/transcribe` => editable transcript => `/api/ai` follow-up => `/api/ai` evaluation => result/retry/progress. With no AI key, deterministic question bank and an explicitly unscored demo review take over. Audio never enters localStorage. Speech turns include language at session level, question, transcript, optional audio ID, timestamp and attempt number.
 
 The planned realtime adapter can emit the same `QUESTION`, `ANSWER`, and `STATUS` actions from WebRTC/VAD events. It should not change the language module or shared UI. Database SQL is designed for authenticated storage, but is intentionally not connected until user auth and row policies exist.
+# Speech MVP
+
+See [SPEECH_SYSTEM.md](SPEECH_SYSTEM.md). Audio capture and Web Audio metrics are browser-local. `/api/transcribe` uses a server-only speech provider registry; text evaluation remains independently selectable. Combined result never fabricates a pronunciation score. Supabase speech tables are future sync design only.
