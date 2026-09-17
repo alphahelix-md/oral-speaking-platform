@@ -8,9 +8,15 @@ function setting(name: string) { return process.env[name]?.trim(); }
 
 async function redis(command: string[]) {
   const url = setting('UPSTASH_REDIS_REST_URL'); const token = setting('UPSTASH_REDIS_REST_TOKEN');
-  if (!url || !token) throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
+  if (!url || !token) {
+    console.error('[BETA_GUARD_CONFIG]', { hasRedisUrl: Boolean(url), hasRedisToken: Boolean(token) });
+    throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
+  }
   const response = await fetch(`${url.replace(/\/$/, '')}/${command.map(encodeURIComponent).join('/')}`, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
-  if (!response.ok) throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
+  if (!response.ok) {
+    console.error('[BETA_GUARD_REDIS]', { status: response.status });
+    throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
+  }
   return response.json() as Promise<{ result: number | string | null }>;
 }
 
@@ -19,7 +25,10 @@ export async function guardBetaRequest(request: Request) {
   const codes = setting('BETA_ACCESS_CODES')?.split(',').map(code => code.trim()).filter(Boolean) || [];
   const limit = Number(setting('BETA_DAILY_REQUEST_LIMIT'));
   const code = request.headers.get('x-beta-access-code')?.trim() || '';
-  if (!codes.length || !Number.isInteger(limit) || limit < 1) throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
+  if (!codes.length || !Number.isInteger(limit) || limit < 1) {
+    console.error('[BETA_GUARD_CONFIG]', { requestId: request.headers.get('x-speech-request-id') || undefined, hasCodes: codes.length > 0, validLimit: Number.isInteger(limit) && limit > 0 });
+    throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
+  }
   if (!codes.includes(code)) throw new GuardError('BETA_ACCESS_DENIED');
 
   const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';

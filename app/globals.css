@@ -67,3 +67,5 @@ h1 em { font-style:normal; color:var(--accent); font-weight:400; }
 .speech-result { display: grid; gap: 16px; margin: 16px 0 28px; }
 .speech-metric-item { padding: 12px 0; border-top: 1px solid var(--border, #dce6de); overflow-wrap: anywhere; }
 .speech-metric-item p { margin: 8px 0 0; line-height: 1.55; }
+.speech-debug-panel { margin: 16px 0; padding: 14px; border: 1px solid currentColor; border-radius: 12px; font-size: 12px; overflow-wrap: anywhere; }
+.speech-debug-panel pre { white-space: pre-wrap; font-size: 11px; }
