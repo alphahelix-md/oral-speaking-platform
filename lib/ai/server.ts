@@ -3,6 +3,7 @@ import { languages } from '@/languages';
 import { modes } from '@/training/config';
 import type { LanguageId, ModeId, Turn, Evaluation } from '@/types/speaking';
 import type { UiLanguage } from '@/lib/ui-translations';
+import { ieltsPartAt } from '@/exams/ielts/plan';
 
 export type TextProvider = 'openai' | 'deepseek' | 'glm';
 const providerConfig: Record<TextProvider, { key?: string; model: string; url: string; format: 'responses' | 'chat' }> = {
@@ -31,7 +32,8 @@ async function generate(provider: TextProvider, instructions: string, input: str
 export async function nextQuestion(provider: TextProvider, language: LanguageId, mode: ModeId, topic: string, level: string, turns: Turn[]): Promise<string> {
   const config = languages[language]; const training = modes[mode];
   const history = turns.map(t => `Examiner: ${t.question}\nLearner: ${t.transcript}`).join('\n');
-  const output = await generate(provider, `${config.conversationPrompt}\n${training.prompt}\nLevel: ${level}. Topic: ${topic}. Return ONLY the next question, under 35 words. Language: ${config.name}.`, `Conversation so far:\n${history}\nAsk one relevant follow-up.`);
+  const stage = mode === 'ielts' ? `Stay in IELTS Speaking Part ${ieltsPartAt(topic, turns.length)}. Ask a relevant follow-up for this part only; do not move to another part.` : '';
+  const output = await generate(provider, `${config.conversationPrompt}\n${training.prompt}\n${stage}\nLevel: ${level}. Topic: ${topic}. Return ONLY the next question, under 35 words. Language: ${config.name}.`, `Conversation so far:\n${history}\nAsk one relevant follow-up.`);
   return output.trim().replace(/^['"“”]|['"“”]$/g, '').slice(0, 500);
 }
 

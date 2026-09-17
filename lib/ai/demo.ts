@@ -1,9 +1,9 @@
 import { languages } from '@/languages';
 import type { Evaluation, LanguageId, ModeId, Turn } from '@/types/speaking';
 import type { UiLanguage } from '@/lib/ui-translations';
+import { ieltsQuestionAt } from '@/exams/ielts/plan';
 export function demoQuestion(language: LanguageId, mode: ModeId, count: number, topic = ''): string {
-  if (mode === 'ielts' && topic.includes('Part 2')) return ['Describe a place you would like to visit. Say where it is, why you want to go, and what you would do there.', 'What makes this place especially interesting to you?'][count % 2];
-  if (mode === 'ielts' && topic.includes('Part 3')) return ['Why do people choose to travel to other countries?', 'How might travel change in the future?'][count % 2];
+  if (mode === 'ielts') return ieltsQuestionAt(topic, count);
   if (language === 'ja' && mode === 'scenario') {
     const scenarios: Record<string, string[]> = { 'コンビニ': ['いらっしゃいませ。何をお探しですか。', 'ほかに何かご入用ですか。'], 'レストラン': ['いらっしゃいませ。ご注文はお決まりですか。', 'お飲み物はいかがですか。'], '駅': ['どちらまで行かれますか。', '片道と往復、どちらになさいますか。'], 'ホテル': ['いらっしゃいませ。ご予約のお名前を教えていただけますか。', '何泊のご予定ですか。'], '職場': ['今日の予定を教えていただけますか。', 'その仕事はいつまでに終わりそうですか。'] };
     return (scenarios[topic] || scenarios['コンビニ'])[count % 2];

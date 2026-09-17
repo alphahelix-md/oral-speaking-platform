@@ -1,7 +1,7 @@
 export type LanguageId = 'en' | 'ja';
 export type ModeId = 'ielts' | 'daily' | 'scenario' | 'topic' | 'free-talk' | 'toefl' | 'interview' | 'weakness';
 export type SessionStatus = 'idle' | 'ai-speaking' | 'listening' | 'recording' | 'processing' | 'thinking' | 'finished';
-export type Turn = { id: string; question: string; transcript: string; audioId?: string; createdAt: string; attempt: number; durationSeconds: number; aiResponse?: string };
+export type Turn = { id: string; question: string; transcript: string; audioId?: string; createdAt: string; attempt: number; durationSeconds: number; aiResponse?: string; examPart?: 1 | 2 | 3 };
 export type Score = { key: string; label: string; value: number; note: string };
 export type Evaluation = { summary: string; scores: Score[]; strengths: string[]; improvements: string[]; weaknesses: string[]; model: 'ai' | 'demo' };
 export type Session = { id: string; language: LanguageId; mode: ModeId; level: string; topic: string; status: SessionStatus; question: string; turns: Turn[]; startedAt: string; endedAt?: string; evaluation?: Evaluation; examType?: string | null };
