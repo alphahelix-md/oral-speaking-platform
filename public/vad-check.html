@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>录音分段测试</title>
+  <style>
+    body { box-sizing: border-box; max-width: 680px; margin: auto; padding: 24px; font: 16px/1.5 system-ui, sans-serif; color: #263b35; background: #f7fbf8; }
+    button, input { font: inherit; margin: 8px 0; }
+    button { padding: 10px 16px; border: 0; border-radius: 10px; color: white; background: #456b54; }
+    button:disabled { opacity: .5; }
+    pre { white-space: pre-wrap; background: white; padding: 12px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>录音分段测试</h1>
+  <p>选手机里导出的录音，点击分析。录音只在本机浏览器处理，不上传。首次加载需要下载约 3 MB 测试组件。</p>
+  <input id="audio" type="file" accept="audio/*" />
+  <button id="run" disabled>分析发声区间</button>
+  <pre id="status">正在加载测试代码…</pre>
+  <ol id="segments"></ol>
+  <p>请截图结果，并告诉我手机型号和浏览器。若分段与听到的停顿不符，也请说明。</p>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.wasm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/bundle.min.js"></script>
+  <script>
+    const fileInput = document.querySelector('#audio');
+    const run = document.querySelector('#run');
+    const status = document.querySelector('#status');
+    const segments = document.querySelector('#segments');
+    status.textContent = '选择音频开始。';
+    fileInput.addEventListener('change', () => { run.disabled = !fileInput.files.length; });
+    run.addEventListener('click', async () => {
+      run.disabled = true;
+      segments.replaceChildren();
+      const started = performance.now();
+      let context;
+      try {
+        const file = fileInput.files[0];
+        if (!file) throw new Error('先选择音频');
+        status.textContent = '解码音频…';
+        context = new AudioContext();
+        const decoded = await context.decodeAudioData(await file.arrayBuffer());
+        const mono = new Float32Array(decoded.length);
+        for (let channel = 0; channel < decoded.numberOfChannels; channel++) {
+          const samples = decoded.getChannelData(channel);
+          for (let i = 0; i < samples.length; i++) mono[i] += samples[i] / decoded.numberOfChannels;
+        }
+        status.textContent = '加载模型、分析音频…';
+        const detector = await vad.NonRealTimeVAD.new({
+          baseAssetPath: 'https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.31/dist/',
+          onnxWASMBasePath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/'
+        });
+        let count = 0;
+        for await (const { start, end } of detector.run(mono, decoded.sampleRate)) {
+          const line = document.createElement('li');
+          line.textContent = `${(start / 1000).toFixed(2)}–${(end / 1000).toFixed(2)} 秒`;
+          segments.append(line);
+          count++;
+        }
+        status.textContent = `${count} 段发声；音频 ${decoded.duration.toFixed(1)} 秒；总耗时 ${((performance.now() - started) / 1000).toFixed(1)} 秒。请人工核对句首/句尾。`;
+      } catch (error) {
+        status.textContent = `测试失败：${error instanceof Error ? error.message : String(error)}`;
+      } finally {
+        if (context) await context.close();
+        run.disabled = !fileInput.files.length;
+      }
+    });
+  </script>
+</body>
+</html>
