@@ -1,4 +1,4 @@
-const CACHE = 'oral-shell-v3';
+const CACHE = 'oral-shell-v4';
 const SHELL = ['/', '/icon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', event => {
@@ -9,8 +9,14 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(key => key.startsWith('oral-shell-') && key !== CACHE).map(key => caches.delete(key))))
-      .then(() => self.clients.claim())
+      .then(async keys => {
+        const oldCaches = keys.filter(key => key.startsWith('oral-shell-') && key !== CACHE);
+        await Promise.all(oldCaches.map(key => caches.delete(key)));
+        await self.clients.claim();
+        if (!oldCaches.length) return;
+        const clients = await self.clients.matchAll({ type: 'window' });
+        await Promise.all(clients.map(client => client.navigate(client.url)));
+      })
   );
 });
 
