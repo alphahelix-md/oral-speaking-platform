@@ -90,3 +90,8 @@ h1 em { font-style:normal; color:var(--accent); font-weight:400; }
 .recording-copy { width: max-content; border: 0; background: var(--soft); color: var(--green); border-radius: 8px; padding: 7px 10px; font-size: 11px; font-weight: 700; }
 .recording-card .turn-actions button:disabled { opacity: .5; }
 .pause-preview { margin: 0 0 16px; text-align: left; }
+.pause-preview > div { min-width: 0; }
+.pause-preview strong { display: block; color: var(--ink); }
+.pause-preview ol { margin: 7px 0; padding-left: 20px; color: var(--ink); }
+.pause-preview li { margin: 3px 0; font-variant-numeric: tabular-nums; }
+.pause-preview small { display: block; color: var(--muted); line-height: 1.5; }

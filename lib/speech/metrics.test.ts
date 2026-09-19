@@ -13,6 +13,7 @@ describe('basic audio metrics', () => {
     const metrics = calculateAudioMetrics(samples, samples.length * 50, englishSpeechConfig);
     expect(metrics.pauseCount).toBe(1);
     expect(metrics.longPauseCount).toBe(1);
+    expect(metrics.longPauseIntervals).toEqual([{ startSeconds: 1, endSeconds: 2.8, durationSeconds: 1.8 }]);
     expect(metrics.speakingDurationSeconds).toBeCloseTo(1);
     expect(metrics.silenceRatio).toBeGreaterThan(0.7);
   });
