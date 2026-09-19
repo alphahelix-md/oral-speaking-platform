@@ -3,6 +3,7 @@ import { calculateAudioMetrics } from './metrics';
 import { englishSpeechConfig } from '@/languages/en/speech-config';
 import { japaneseSpeechConfig } from '@/languages/ja/speech-config';
 import { combineEvaluation } from './combined-evaluator';
+import { buildDeliveryEvidence } from './evidence';
 
 describe('basic audio metrics', () => {
   it('marks unsupported or empty analysis unavailable', () => {
@@ -24,5 +25,12 @@ describe('basic audio metrics', () => {
   });
   it('never invents a pronunciation score', () => {
     expect(combineEvaluation(null, []).pronunciation).toEqual({ status: 'not_available', score: null });
+  });
+  it('formats measured delivery evidence without claiming pronunciation', () => {
+    const metrics = calculateAudioMetrics([...Array(10).fill(0.1), ...Array(35).fill(0), ...Array(10).fill(0.1)], 2750, englishSpeechConfig);
+    const evidence = buildDeliveryEvidence([{ id: 'turn-1', question: 'Q', transcript: 'A', createdAt: '2026-09-20T00:00:00Z', attempt: 1, durationSeconds: 2.75, audioMetrics: metrics }]);
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toContain('long-pause intervals 0.5-2.3s');
+    expect(evidence[0]).not.toContain('pronunciation');
   });
 });

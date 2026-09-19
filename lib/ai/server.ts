@@ -5,6 +5,7 @@ import type { LanguageId, ModeId, Turn, Evaluation } from '@/types/speaking';
 import type { UiLanguage } from '@/lib/ui-translations';
 import { ieltsPartAt } from '@/exams/ielts/plan';
 import { ieltsQuestionSet } from '@/exams/ielts/bank';
+import { buildDeliveryEvidence } from '@/lib/speech/evidence';
 
 export type TextProvider = 'openai' | 'deepseek' | 'glm';
 const providerConfig: Record<TextProvider, { key?: string; model: string; url: string; format: 'responses' | 'chat' }> = {
@@ -42,8 +43,9 @@ const evaluationSchema = z.object({ summary: z.string(), scores: z.array(z.objec
 export async function evaluate(provider: TextProvider, language: LanguageId, mode: ModeId, turns: Turn[], uiLanguage: UiLanguage = 'en'): Promise<Evaluation> {
   const config = languages[language]; const rubric = modes[mode].rubric || config.rubric;
   const transcript = turns.map(t => `Question: ${t.question}\nAttempt ${t.attempt}: ${t.transcript}`).join('\n');
+  const deliveryEvidence = buildDeliveryEvidence(turns);
   const feedbackLanguage = { 'zh-CN': 'Simplified Chinese', en: 'English', 'zh-HK': 'Traditional Chinese as used in Hong Kong', ja: 'Japanese' }[uiLanguage];
-  const output = await generate(provider, `${config.evaluationPrompt}\nRubric: ${JSON.stringify(rubric)}. Write all feedback prose in ${feedbackLanguage}, regardless of the language being practiced. Keep JSON keys and rubric keys in English. Return ONLY JSON: {"summary":string,"scores":[{"key":string,"value":number 0-10,"note":string}],"strengths":string[],"improvements":string[],"weaknesses":string[]}. Include only rubric keys supported by transcript. Never score pronunciation from a transcript. For IELTS, these are practice indicators, never official bands.`, transcript);
+  const output = await generate(provider, `${config.evaluationPrompt}\nRubric: ${JSON.stringify(rubric)}. Write all feedback prose in ${feedbackLanguage}, regardless of the language being practiced. Keep JSON keys and rubric keys in English. Return ONLY JSON: {"summary":string,"scores":[{"key":string,"value":number 0-10,"note":string}],"strengths":string[],"improvements":string[],"weaknesses":string[]}. Include only rubric keys supported by transcript. Audio evidence below contains microphone-volume estimates only. Use it for specific rhythm observations in summary or improvements, but do not turn it into a numeric score and do not infer pronunciation, accent, acoustic fluency, or audio quality. Never score pronunciation from a transcript. For IELTS, these are practice indicators, never official bands.`, `${transcript}\n\nBasic audio evidence:\n${deliveryEvidence.length ? deliveryEvidence.join('\n') : 'Unavailable.'}`);
   const parsed = evaluationSchema.parse(JSON.parse(output.replace(/^```(?:json)?\s*|\s*```$/g, '')));
-  return { ...parsed, scores: parsed.scores.filter(s => s.key !== 'pronunciation' && rubric.some(r => r.key === s.key)).map(s => ({ ...s, label: rubric.find(r => r.key === s.key)!.label })), model: 'ai' };
+  return { ...parsed, scores: parsed.scores.filter(s => s.key !== 'pronunciation' && rubric.some(r => r.key === s.key)).map(s => ({ ...s, label: rubric.find(r => r.key === s.key)!.label })), model: 'ai', evidenceSources: deliveryEvidence.length ? ['transcript', 'basic_audio_metrics'] : ['transcript'] };
 }

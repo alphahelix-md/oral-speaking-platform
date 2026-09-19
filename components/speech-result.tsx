@@ -10,6 +10,7 @@ export function SpeechResult({ turns, uiLanguage }: { turns: Turn[]; uiLanguage:
   return <div className="speech-result">
     <section className="feedback-card"><div className="feedback-head"><strong>{copy.delivery}</strong></div>
       <p className="feedback-disclaimer">{copy.sourceNote}</p>
+      {combined.delivery.kind === 'basic_estimate' && <p className="feedback-disclaimer">{copy.combinedBasis}</p>}
       {combined.delivery.kind === 'basic_estimate' ? audioTurns.map(turn => {
         const metrics = turn.audioMetrics!;
         const prior = turns.filter(item => item.question === turn.question && item.attempt < turn.attempt && item.audioMetrics).at(-1);

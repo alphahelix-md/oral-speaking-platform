@@ -1,4 +1,4 @@
-const CACHE = 'oral-shell-v4';
+const CACHE = 'oral-shell-v5';
 const SHELL = ['/', '/icon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', event => {
