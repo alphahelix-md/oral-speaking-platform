@@ -1,11 +1,372 @@
-# Roadmap and phase record
+# Oral 未来发展总计划
 
-1. Complete: Next.js, TypeScript, Tailwind, PWA shell.
-2. Complete: shared reducer and language/mode configuration.
-3. Complete: English and Japanese modules, home and selector.
-4. Complete: shared speaking page, MediaRecorder, pause/stop/playback, language-aware transcription route.
-5. Complete: IELTS, English conversation, Japanese conversation/scenario, optional AI follow-up/evaluation, local retry and progress.
-6. Partial: service worker and install metadata. Device-specific install and microphone QA remain necessary.
-7. Next: authenticated Supabase sync with row policies, cloud audio storage, rate limits, automated browser/device tests, validated exam rubrics, realtime WebRTC/VAD, more modes, speech-based pronunciation analysis.
+> 状态：项目唯一权威路线图
+>
+> 生效日期：2026-09-20
+>
+> 适用范围：产品、架构、模型、成本、测试、合规与发布
+> 维护规则：任何新增功能、Provider 或基础设施，必须先符合本计划；方向变化时先修改本文件，再修改代码。
 
-No generated demo review is represented as real AI feedback. No official IELTS/JLPT score is claimed.
+## 1. 北极星与边界
+
+Oral 的核心价值不是“调用最多模型”，而是让用户低压力、低等待地完成一次可复盘的英日口语练习。
+
+优先级固定为：
+
+1. 录音与用户输入不丢失。
+2. 核心练习可完成。
+3. 转写准确、语言不串线。
+4. 核心反馈快、可解释。
+5. 高级分析逐步补充。
+
+当前不承诺：
+
+- 官方 IELTS、TOEFL、JLPT 分数。
+- 未经校准的发音数字分。
+- 所有浏览器、机型、网络下完全一致的实时体验。
+- 用户未明确同意时上传录音用于训练。
+
+## 2. 最小成功定义
+
+一次练习满足以下条件，即视为成功：
+
+- 原始录音已保存在本机，或用户可立即下载备份。
+- 用户可获得转写，或可手动编辑/输入文本。
+- 用户能够继续下一题或结束练习。
+- 任一 AI、TTS、云存储、Progress 服务失败，不得删除录音或报废整个 Session。
+
+所有模型都成功，不是最小成功条件。
+
+## 3. 目标架构
+
+### 3.1 核心快链路
+
+```text
+录音结束
+  ├─ 本机立即保存原始音频
+  ├─ 本地计算时长、停顿、静音、音量指标
+  └─ STT 转写
+        └─ 一次结构化 Evaluation
+              └─ 展示核心报告
+```
+
+核心链路只保留两次正常外部模型调用：
+
+- STT：每段录音一次计费。
+- Evaluation：每次 Session 最多一次；同时返回核心评价、改进建议、复习任务草案。
+
+### 3.2 可降级辅助链路
+
+```text
+核心报告已展示
+  ├─ Coach 详细解释（按需）
+  ├─ Pronunciation 分析（有能力时）
+  ├─ 云端训练音频上传（已同意时）
+  └─ Progress 同步
+```
+
+辅助任务必须满足：
+
+- 不阻塞继续练习、查看核心报告或退出页面。
+- 有独立状态：`pending / running / succeeded / degraded / failed`。
+- 页面关闭后仍需完成的任务，必须先写入持久任务记录；不能依赖 Vercel 响应结束后的进程继续运行。
+- 失败可重试，且重试必须幂等，不能重复扣费或重复写入。
+
+## 4. 模块职责与降级规则
+
+| 模块 | 默认实现 | 目标 | 故障时行为 |
+|---|---|---|---|
+| 录音 | MediaRecorder + 标准化 WAV | 原音可靠保存 | 提供重录、下载；不进入空 Session |
+| 本地指标 | Web Audio | 1.5 秒内完成 | 跳过指标，不阻塞转写 |
+| STT | GLM | 英日语言固定、文本可编辑 | 重试一次；再失败则保留音频并允许手动输入 |
+| Evaluation | 单一性价比文本模型 | 一次返回结构化核心报告 | 展示 Transcript + 本地指标，不伪造分数 |
+| Coach | 默认不自动调用 | 用户主动请求详细解释 | 失败后可重试，不影响核心报告 |
+| Pronunciation | 当前 `NotAvailable` | 经验证后给证据或专业评估 | 明示“暂未评估”，不产生假分数 |
+| TTS | 云端自然语音 + 设备缓存 | 后台预加载、点击即播 | 本机语音兜底；仍失败则只显示文字 |
+| 本机存储 | IndexedDB / localStorage | 录音与 Session 本机优先 | 提供下载；明确浏览器清理风险 |
+| 云端存储 | Supabase，按同意上传 | 私有、可撤回、可删除 | 后台重试，不阻塞练习 |
+| Progress | 本地计算，后续云同步 | 趋势可追溯 | 本地暂存，联网后同步 |
+
+## 5. Provider 策略
+
+### 5.1 固定规则
+
+- 每种能力最多维护一个 Primary、一个 Fallback、一个 Manual/Local fallback。
+- 当前先建立接口，不因“未来可能需要”提前接入备用 Provider。
+- UI 不得依赖供应商名、模型请求格式或 API Key。
+- Provider 切换由服务器路由和健康状态决定。
+- 新 Provider 必须先通过英日 Benchmark、成本评估、许可证与隐私审核。
+
+### 5.2 自动切换边界
+
+| 错误类型 | 行为 |
+|---|---|
+| 网络超时、连接失败、5xx | Primary 重试一次；仍失败时才允许 Fallback |
+| 429 | 不盲目切换；展示额度/频率状态，遵守退避时间 |
+| 401、403、密钥配置错误 | 不切换；报警并停止消耗 |
+| 音频格式、参数、语言错误 | 不切换；修正输入或让用户重录 |
+| 输出 JSON 不合法 | 同 Provider 修复重试一次；再失败返回基础报告 |
+| 语言边界不符 | 同语言约束重试一次；再失败允许用户编辑 |
+
+### 5.3 启用第二 Provider 的门槛
+
+满足任一条件才进入正式接入评审：
+
+- 连续 7 天 STT 成功率低于 98%。
+- Provider 故障造成核心练习失败率超过 2%。
+- 月 STT 成本达到 150 美元或 30,000 音频分钟。
+- 主 Provider 政策、付款或地区可用性形成明确业务风险。
+
+## 6. 成本与调用预算
+
+### 6.1 每次 Session 默认预算
+
+| 能力 | 默认调用次数 |
+|---|---:|
+| STT | 每段录音 1 次；分块仍按一段计数 |
+| AI 动态追问 | 0 次；优先本地题库 |
+| Core Evaluation | Session 结束后最多 1 次 |
+| Coach | 0 次；用户主动请求时最多 1 次 |
+| Pronunciation | 0 次；功能正式开放后按套餐控制 |
+| TTS | 每个新题首次生成 1 次，设备缓存复用 |
+
+### 6.2 Cost Governor
+
+服务器必须执行：
+
+- 每账号每日转写分钟和次数上限。
+- 单录音时长、大小和重试上限。
+- 每 Session、每天、每账号的 LLM 调用上限。
+- Provider 月预算与报警阈值。
+- 记录 `provider / model / latency / status / estimatedCost`，日志不得保存原始录音或完整隐私文本。
+
+成本预算参考 `RESEARCH/COST_MODEL.md`；价格变化时先更新成本文件，再改策略。
+
+## 7. 时延目标
+
+以下目标从用户停止录音时开始计算：
+
+| 场景 | p50 | p95 |
+|---|---:|---:|
+| 页面立即显示处理中 | <0.2 秒 | <0.5 秒 |
+| 本地音频指标 | <0.8 秒 | <1.5 秒 |
+| 60 秒以内录音完成转写 | <5 秒 | <12 秒 |
+| 核心报告总等待 | <8 秒 | <15 秒 |
+| 60–120 秒 IELTS 长回答核心报告 | <15 秒 | <25 秒 |
+
+产品规则：
+
+- 日常与普通对话建议 15–60 秒。
+- 60–120 秒只用于 IELTS 等明确长回答场景。
+- TTS、训练上传、Progress 不进入核心等待时间。
+- 超过目标时显示具体阶段，不只显示“处理中”。
+
+## 8. 数据模型与可比性
+
+数据层必须独立于模型。规划实体：
+
+- `Session`
+- `Recording`
+- `TranscriptRun`
+- `EvaluationRun`
+- `PronunciationRun`
+- `CoachRun`
+- `SyncJob`
+- `BudgetLedger`
+
+每次派生结果至少保存：
+
+```text
+providerId
+modelVersion
+promptVersion
+rubricVersion
+schemaVersion
+status
+latencyMs
+estimatedCost
+createdAt
+```
+
+规则：
+
+- 原始录音不被降噪、裁剪或转码结果覆盖。
+- 新模型重新评分产生新 `Run`，不覆盖旧评分。
+- 不同 `rubricVersion` 的分数不能直接绘制成同一趋势。
+- 原始音频只有在用户明确同意对应目的后才上传。
+- 训练同意、产品同步同意必须分开，不得混用。
+
+## 9. 发布阶段
+
+### Phase V0：受控 Alpha 稳定化
+
+建议周期：1–2 周。规模：5–10 名可信测试者。
+
+工作：
+
+- 完成 Android Chrome、iPhone Safari、桌面 Chrome 的英日真机流程。
+- 记录转写成功率、等待时间、失败阶段和单次成本。
+- 修复 P0/P1 问题，不增加新练习模式。
+- 配置自有 SMTP，避免 Supabase 默认邮件限流。
+- 增加隐私说明、录音用途、撤回与删除说明。
+
+退出门槛：
+
+- 连续 3 天无 P0/P1。
+- 录音丢失事故为 0。
+- 核心 Session 完成率不低于 90%。
+- 英日转写成功率不低于 95%。
+- 已知失败均能进入可用降级路径。
+
+### Phase V0.5：快链路与可靠性基础
+
+建议周期：2–3 周。规模：10–30 名测试者。
+
+工作：
+
+- 固化 Provider 契约和统一错误分类。
+- 本地题库优先；AI 追问改为按需。
+- 合并 Core Evaluation、改进建议、复习任务为一次结构化调用。
+- 建立 Session 状态机、幂等键、Cost Governor。
+- 显示今日剩余转写额度和准确处理阶段。
+- 将每日额度迁入 Supabase 原子计数，验证稳定后移除 Upstash。
+
+退出门槛：
+
+- 核心链路不依赖 AI 动态出题。
+- 任何单个 Provider 故障不会丢失录音或阻塞结束 Session。
+- 核心 Session 完成率不低于 95%。
+- 60 秒以内录音 p95 核心结果不超过 15 秒。
+
+### Phase V1：账号、同步与运营闭环
+
+建议周期：2–4 周。规模：20–50 名测试者。
+
+工作：
+
+- 一次邀请码激活账号，后续不再要求用户理解测试访问码。
+- 测试者邀请、停用、额度和使用状态管理。
+- Session 与 Progress 跨设备同步。
+- 用户可查看、导出、删除云端个人数据。
+- 云端上传使用持久任务、幂等重试与明确状态。
+- 建立错误率、时延、成本和 Provider 健康看板。
+
+退出门槛：
+
+- 登录邮件与邀请码流程稳定。
+- 数据隔离和 Supabase RLS 测试通过。
+- 云端失败不影响本机数据。
+- 隐私、删除和数据保留规则可执行。
+
+### Phase V1.5：Benchmark 与备用能力
+
+建议周期：2 周研究；是否接入由数据决定。
+
+工作：
+
+- 建立经人工核对的英日录音金标集。
+- 比较主 STT、候选云 STT、faster-whisper、whisper.cpp/sherpa POC。
+- 比较文本模型的评分稳定性、JSON 成功率、时延和成本。
+- 只有通过门槛的 Provider 才进入 Router。
+
+不自动接入：
+
+- 本地 ASR 大模型。
+- 第二云 STT。
+- 自托管 GPU。
+
+### Phase V2：发音证据与专业评估
+
+建议周期：4–8 周研究与校准。
+
+顺序：
+
+1. 客观指标：时长、停顿、静音比、语速、能量。
+2. 时间对齐证据：词段回放、漏读/多读候选；不直接判错。
+3. 专业 Pronunciation Provider 对照测试。
+4. 英语和日语分别建立学习者样本与人工标签。
+5. 只有通过一致性、有效性和偏差测试后，才发布数字评分。
+
+禁止：把 STT 置信度、音量或停顿直接包装为发音分。
+
+### Phase V2.5：Coach、复习与留存
+
+建议周期：2–4 周。
+
+- Coach 按需展开，不阻塞核心报告。
+- 复习任务尽量使用规则和模板生成。
+- 错题、词汇、重试与进步趋势建立关联。
+- 只保留能证明提升留存或学习效果的功能。
+
+### Phase V3：Realtime Speech
+
+前置条件：有稳定收入、明确用户需求、成熟监控与成本控制。
+
+此阶段才评估：
+
+- 流式 STT。
+- WebRTC 实时对话。
+- 实时语音打断与低延迟 TTS。
+- 专用实时模型。
+
+Realtime 不进入当前 Alpha 或早期 Beta 范围。
+
+## 10. 发布门槛
+
+| 阶段 | 允许规模 | 必备条件 |
+|---|---:|---|
+| 受控 Alpha | 5–10 人 | 当前核心闭环、人工邀请、日志可查、录音不丢 |
+| 扩大 Alpha | 20–30 人 | V0 退出门槛、自有 SMTP、隐私说明、成本告警 |
+| 封闭 Beta | 50–100 人 | V0.5 与 V1 核心完成、账号管理、RLS、删除/导出 |
+| 公开 Beta | 数据决定 | 正式 TTS SLA、容量测试、安全审计、客服与事故处理流程 |
+
+公开 Beta 不以“功能数量”为门槛，以稳定性、成本可控和隐私合规为门槛。
+
+## 11. 风险等级
+
+- P0：隐私泄露、越权访问、不可恢复数据丢失。立即停止扩量。
+- P1：无法录音、无法继续/结束 Session、主要用户普遍无法转写。优先修复，暂停新功能。
+- P2：AI 降级、TTS 失败、云上传失败、部分报告缺失。允许降级运行，进入近期修复。
+- P3：文案、视觉、非核心体验问题。按影响排期。
+
+任何 Phase 有未解决 P0/P1，不得进入下一 Phase。
+
+## 12. 暂不实施清单
+
+- 每轮都调用 AI 动态出题。
+- 同一任务同时调用多个模型取平均。
+- 未经 Benchmark 接入第二 Provider。
+- 手机本地大模型进入默认主链路。
+- 未校准发音分、IELTS Band 或 JLPT 口语分。
+- 默认上传用户录音训练。
+- 公开用户自助注册而无成本和滥用控制。
+- 为追求“完整”让 Coach、Pronunciation、Progress 阻塞核心结果。
+
+## 13. 每次开发的执行规则
+
+每个迭代必须按顺序完成：
+
+1. 明确对应 Phase、用户价值、成功指标和失败降级。
+2. 检查是否新增 Provider、隐私数据、持续成本或关键依赖。
+3. 只实现当前 Phase 最小范围。
+4. 完成自动测试、类型检查、生产构建和真机关键流程。
+5. 记录时延、成本、错误码和回滚方式。
+6. 更新本路线图中的状态；未通过退出门槛不得提前进入下一 Phase。
+
+Definition of Done：
+
+- 正常路径通过。
+- 降级路径通过。
+- 重试不重复扣费或写入。
+- 用户数据不丢失。
+- UI 不伪装模型能力。
+- 文档、测试、监控和回滚说明同步完成。
+
+## 14. 当前决策摘要
+
+- 当前主 STT：GLM；继续使用并监控。
+- 当前 Evaluation：选择一个主力文本模型；最终选择以 Benchmark 为准。
+- 当前 TTS：云端自然语音 + 设备缓存 + 本机兜底；公开 Beta 前换为有正式 SLA 的服务。
+- 当前数据策略：本机优先；训练上传必须单独同意。
+- 当前发布状态：具备 5–10 人受控 Alpha 条件。
+- 当前最高优先级：稳定性、观测、成本控制、真机覆盖；不是增加模式或模型数量。
