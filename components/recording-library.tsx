@@ -17,6 +17,20 @@ const recoveryCopy = {
   ja: { retry: '再度文字起こし', working: '文字起こし中', editCode: 'アクセスコードを確認', unknownLanguage: 'この古い録音の言語を特定できません。', copied: 'コピー済み', copy: '文字起こしをコピー' },
 } satisfies Record<UiLanguage, Record<string, string>>;
 
+const trainingStateCopy: Record<UiLanguage, { cloudSaved: string; localOnly: string }> = {
+  'zh-CN': { cloudSaved: '已保存到私有改进库', localOnly: '仅保存在本机' },
+  en: { cloudSaved: 'Saved to private improvement library', localOnly: 'Stored on this device only' },
+  'zh-HK': { cloudSaved: '已儲存至私人改善資料庫', localOnly: '只儲存在本機' },
+  ja: { cloudSaved: '非公開の改善ライブラリに保存済み', localOnly: 'この端末内にのみ保存' },
+};
+
+const privacyNoticeCopy: Record<UiLanguage, string> = {
+  'zh-CN': '转写会把音频发送给当前语音服务。只有账户明确同意后，今后的录音才会上传到私有改进库；可在个人页撤回并删除云端内容。',
+  en: 'Transcription sends audio to the current speech service. Future recordings upload to the private improvement library only after explicit account consent; revoke and delete cloud copies from Profile.',
+  'zh-HK': '轉寫會把音訊傳送至現有語音服務。只有帳戶明確同意後，往後錄音才會上傳至私人改善資料庫；可在個人頁撤回及刪除雲端內容。',
+  ja: '文字起こしでは音声を現在の音声サービスへ送信します。アカウントで明示的に同意した場合のみ今後の録音を非公開の改善ライブラリへアップロードし、プロフィールから撤回・削除できます。',
+};
+
 const copy = {
   'zh-CN': { title: '我的录音', intro: '原始录音保存在当前浏览器。可回放或下载备份。', empty: '还没有录音。完成一次语音回答后会显示在这里。', play: '播放', download: '下载', delete: '删除', confirmDelete: '确定永久删除这段本地录音吗？此操作无法撤销。', unavailable: '录音库暂时无法读取。', deleteFailed: '删除失败，请重试。', upload: '上传录音用于训练（尚未开放）', privacy: '语音转写会发送音频给现有转写服务；录音库不会自动上传音频用于训练。未来训练将单独征求同意。', unknown: '未关联的录音', pending: '尚未提交的回答', size: '文件大小' },
   en: { title: 'My recordings', intro: 'Original audio stays in this browser. Replay or download a backup.', empty: 'No recordings yet. Finish a spoken answer to see it here.', play: 'Play', download: 'Download', delete: 'Delete', confirmDelete: 'Permanently delete this local recording? This cannot be undone.', unavailable: 'Recording library is temporarily unavailable.', deleteFailed: 'Could not delete. Please try again.', upload: 'Upload for training (not available yet)', privacy: 'Transcription sends audio to the current speech service. The library never uploads audio for training automatically; training will require separate consent.', unknown: 'Unlinked recording', pending: 'Answer not submitted', size: 'File size' },
@@ -113,7 +127,7 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
         if (!response.ok) throw new Error(String(data.error || 'TRANSCRIPTION_FAILED'));
         parts[index] = String(data.text || '').trim();
         const transcript = parts.filter(Boolean).join(' ');
-        const metadata: Partial<Omit<AudioMetadata, 'trainingConsent'>> = {
+        const metadata: Partial<AudioMetadata> = {
           createdAt: entry.metadata?.createdAt || linked?.turn.createdAt || new Date().toISOString(),
           language,
           sessionId: entry.metadata?.sessionId || linked?.session.id,
@@ -124,7 +138,7 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
         await updateAudioMetadata(entry.id, metadata);
         setEntries(items => items.map(item => item.id === entry.id ? {
           ...item,
-          metadata: { ...item.metadata, ...metadata, trainingConsent: false } as AudioMetadata,
+          metadata: { ...item.metadata, ...metadata, trainingConsent: item.metadata?.trainingConsent || false } as AudioMetadata,
         } : item));
       }
       if (!parts.some(Boolean)) throw new Error('EMPTY_TRANSCRIPT');
@@ -144,8 +158,7 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
 
   return <section className="recording-library">
     <div className="page-intro"><span className="section-kicker">ORAL / AUDIO</span><h1>{t.title}</h1><p>{t.intro}</p></div>
-    <div className="info-note recording-privacy"><UploadCloud size={18} /><span>{t.privacy}</span></div>
-    <button className="recording-upload" disabled><UploadCloud size={17} /> {t.upload}</button>
+    <div className="info-note recording-privacy"><UploadCloud size={18} /><span>{privacyNoticeCopy[uiLanguage]}</span></div>
     {error && <div className="notice" role="alert">{error}{errorCode === 'BETA_ACCESS_DENIED' && <button className="recording-code-link" onClick={onEditAccessCode}>{recovery.editCode}</button>}</div>}
     {!loading && !entries.length && <p className="empty-copy recording-empty">{t.empty}</p>}
     <div className="recording-list">{entries.map(entry => {
@@ -157,6 +170,7 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
         <strong>{question}</strong>
         <small>{entry.metadata?.transcript || linked?.turn.transcript || t.pending}</small>
         <span className="recording-size">{t.size}: {(entry.blob.size / 1024 / 1024).toFixed(2)} MB</span>
+        <span className="recording-size">{entry.metadata?.trainingUploadedAt ? '☁ ' + trainingStateCopy[uiLanguage].cloudSaved : trainingStateCopy[uiLanguage].localOnly}</span>
         <div className="turn-actions">
           <button onClick={() => play(entry)}><Play size={15} /> {t.play}</button>
           <button onClick={() => download(entry)}><Download size={15} /> {t.download}</button>

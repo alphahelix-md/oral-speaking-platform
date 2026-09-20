@@ -11,8 +11,9 @@ export type AudioMetadata = {
   turnId?: string;
   transcript?: string;
   transcriptionChunks?: string[];
-  // Reserved for a future, separate opt-in upload flow. Never enabled by local recording.
-  trainingConsent: false;
+  trainingConsent: boolean;
+  trainingStoragePath?: string;
+  trainingUploadedAt?: string;
 };
 
 export type AudioLibraryEntry = { id: string; blob: Blob; metadata: AudioMetadata | null };
@@ -74,7 +75,7 @@ export async function listAudio(): Promise<AudioLibraryEntry[]> {
   } finally { db.close(); }
 }
 
-export async function updateAudioMetadata(id: string, changes: Partial<Omit<AudioMetadata, 'trainingConsent'>>): Promise<void> {
+export async function updateAudioMetadata(id: string, changes: Partial<AudioMetadata>): Promise<void> {
   const db = await openDB();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -84,7 +85,7 @@ export async function updateAudioMetadata(id: string, changes: Partial<Omit<Audi
       request.onsuccess = () => {
         if (!request.result) return;
         const current = unpack(id, request.result as StoredAudio);
-        store.put({ blob: current.blob, metadata: { ...current.metadata, createdAt: current.metadata?.createdAt || new Date().toISOString(), ...changes, trainingConsent: false } }, id);
+        store.put({ blob: current.blob, metadata: { ...current.metadata, createdAt: current.metadata?.createdAt || new Date().toISOString(), trainingConsent: current.metadata?.trainingConsent || false, ...changes } }, id);
       };
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
