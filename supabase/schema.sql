@@ -22,6 +22,18 @@ do $$ declare table_name text; begin foreach table_name in array array['users','
 
 -- Explicit opt-in training-audio contribution store. Run this section in the
 -- Supabase SQL editor before enabling account-synced uploads in production.
+create table if not exists public.training_audio_consents (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  allowed boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+alter table public.training_audio_consents enable row level security;
+drop policy if exists "owners manage training consent" on public.training_audio_consents;
+create policy "owners manage training consent" on public.training_audio_consents
+  for all to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+
 create table if not exists public.training_audio_contributions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -44,7 +56,10 @@ drop policy if exists "owners insert training contributions" on public.training_
 create policy "owners insert training contributions" on public.training_audio_contributions for insert to authenticated
   with check (
     auth.uid() = user_id
-    and auth.jwt() -> 'user_metadata' ->> 'oral_training_consent' = 'training'
+    and exists (
+      select 1 from public.training_audio_consents consent
+      where consent.user_id = (select auth.uid()) and consent.allowed
+    )
   );
 drop policy if exists "owners read training contributions" on public.training_audio_contributions;
 create policy "owners read training contributions" on public.training_audio_contributions for select to authenticated using (auth.uid() = user_id);
@@ -60,7 +75,10 @@ create policy "owners upload training audio" on storage.objects for insert to au
   with check (
     bucket_id = 'training-audio'
     and (storage.foldername(name))[1] = auth.uid()::text
-    and auth.jwt() -> 'user_metadata' ->> 'oral_training_consent' = 'training'
+    and exists (
+      select 1 from public.training_audio_consents consent
+      where consent.user_id = (select auth.uid()) and consent.allowed
+    )
   );
 drop policy if exists "owners read training audio" on storage.objects;
 create policy "owners read training audio" on storage.objects for select to authenticated using (bucket_id = 'training-audio' and (storage.foldername(name))[1] = auth.uid()::text);

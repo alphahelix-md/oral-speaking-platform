@@ -167,8 +167,25 @@ export function OralApp() {
     const client = getSupabaseBrowser();
     if (!client || !authUser || consentBusy) return;
     setConsentBusy(true);
+    const allowed = next === 'training';
+    const previousAllowed = trainingConsent === 'training';
+    const { error: consentError } = await client.from('training_audio_consents').upsert({
+      user_id: authUser.id,
+      allowed,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
+    if (consentError) { setConsentBusy(false); setNotice(consentError.message); return; }
     const { error } = await client.auth.updateUser({ data: { oral_training_consent: next, oral_training_consent_updated_at: new Date().toISOString() } });
-    if (error) { setConsentBusy(false); setNotice(error.message); return; }
+    if (error) {
+      await client.from('training_audio_consents').upsert({
+        user_id: authUser.id,
+        allowed: previousAllowed,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' });
+      setConsentBusy(false);
+      setNotice(error.message);
+      return;
+    }
     let cleanupFailed = false;
     if (trainingConsent === 'training' && next === 'local_only') {
       try { await deleteMyTrainingAudio(); } catch { cleanupFailed = true; }
