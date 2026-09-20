@@ -8,9 +8,18 @@ Node 20.9+ required. `npm install`, then `npm run dev`; open http://localhost:30
 
 Copy `.env.example` to `.env.local` and set `OPENAI_API_KEY` for server-side speech transcription, adaptive follow-ups, and evaluation. No key: explicitly labelled demo mode, with local recording, editable manual transcript, deterministic questions, and no fabricated scores. API calls originate from server routes; the key never goes to the browser.
 
-## Data and deployment
+## Data, login and deployment
 
-Sessions persist in browser localStorage; audio blobs persist in IndexedDB on the same device. No sign-in or cross-device sync yet. Clearing site data deletes them. `supabase/schema.sql` is a future authenticated sync schema, not a live integration. Set the optional Supabase environment variables only after implementing auth and owner-scoped policies. Never expose a service-role key in browser code.
+Sessions and audio remain on each device: sessions use browser localStorage and audio blobs use IndexedDB. Clearing browser site data removes that device's recordings. They are not uploaded or shared across accounts in this version.
+
+Invite-only login uses Supabase email magic links. Set these Vercel variables for both Production and Preview:
+
+```text
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+```
+
+Legacy `NEXT_PUBLIC_SUPABASE_ANON_KEY` also works. Never set a Supabase service-role key in browser variables. In Supabase Authentication, set Site URL and Redirect URL to `https://oral-speaking-platform.vercel.app`, then invite each tester from Authentication > Users. Self-registration is disabled by app. Once invited tester signs in and saves test access code in Interface settings, code stores in their account metadata and restores on next signed-in device. Login becomes required for protected AI and transcription requests whenever Supabase variables are configured.
 
 IELTS practice has a full Part 1–3 path plus focused single-part paths. Five original themed sets contain 40 practice prompts; new sessions rotate sets and retain their choice in local history. The bank supplies offline/demo questions and part transitions; AI follow-ups stay within the active part and set theme. Reports mark each question's part. See [the question audit](exams/ielts/QUESTION_AUDIT.md). This is practice, not an official timed mock or band score.
 
@@ -18,7 +27,7 @@ Deploy as a Next.js app on Vercel with `OPENAI_API_KEY` set as a server environm
 
 ## Current boundaries
 
-AI questions are text displayed on screen; optional browser speech synthesis reads them aloud. The first question comes from a curated local bank. Audio is sent to OpenAI only if a key is configured. Evaluation is transcript-based and does not score pronunciation. AI endpoints have input limits but need auth/rate limiting before public launch. IELTS is practice, never official band scoring. Japanese levels are informal difficulty guides, not JLPT oral scores. TOEFL, topic/free-talk/interview/weakness drills, realtime WebRTC, account sync, and reliable streaks remain roadmap items.
+AI questions are text displayed on screen; optional browser speech synthesis reads them aloud. The first question comes from a curated local bank. Evaluation is transcript-based and does not score pronunciation. Login synchronizes only test access-code preference, not recordings or training history. IELTS is practice, never official band scoring. Japanese levels are informal difficulty guides, not JLPT oral scores. TOEFL, topic/free-talk/interview/weakness drills, realtime WebRTC, account data sync, and reliable streaks remain roadmap items.
 
 ## Open-source references
 

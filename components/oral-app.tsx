@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, AudioLines, BarChart3, BookOpen, Check, ChevronRight, CircleHelp, Clock3, Headphones, Home, Languages, Mic, Moon, MoreHorizontal, Pause, Play, RotateCcw, Settings2, Sparkles, Square, Sun, Target, UserRound, Volume2, WandSparkles, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, AudioLines, BarChart3, BookOpen, Check, ChevronRight, CircleHelp, Clock3, Headphones, Home, Languages, LogIn, LogOut, Mail, Mic, Moon, MoreHorizontal, Pause, Play, RotateCcw, Settings2, Sparkles, Square, Sun, Target, UserRound, Volume2, WandSparkles, X } from 'lucide-react';
 import { languages } from '@/languages';
 import { uiExtra, modeUi, topicUi, levelUi, scoreUi } from '@/lib/ui-translations';
 import { modes } from '@/training/config';
@@ -19,6 +19,8 @@ import { demoEvaluation, demoQuestion } from '@/lib/ai/demo';
 import { IELTS_PART_1, IELTS_PART_2, IELTS_PART_3, ieltsPartAt, ieltsPartChangesAfter, ieltsPlan } from '@/exams/ielts/plan';
 import { ieltsQuestionSets } from '@/exams/ielts/bank';
 import type { LanguageId, ModeId, Session, Turn } from '@/types/speaking';
+import { getSupabaseAuthHeaders, getSupabaseBrowser } from '@/lib/auth/supabase-browser';
+import type { User } from '@supabase/supabase-js';
 
 type Page = 'home' | 'practice' | 'setup' | 'speaking' | 'result' | 'progress' | 'profile' | 'recordings';
 type UiLanguage = 'zh-CN' | 'en' | 'zh-HK' | 'ja';
@@ -50,6 +52,12 @@ const localRecordingDisclosure: Record<UiLanguage, string> = {
   'zh-HK': '停止錄音後，原音會儲存在此瀏覽器；轉寫時可能傳送至語音服務。可在「我的錄音」下載或刪除。',
   ja: '録音を止めると元の音声がこのブラウザに保存されます。文字起こしでは音声サービスに送信される場合があります。録音ライブラリでダウンロードや削除ができます。',
 };
+const authCopy: Record<UiLanguage, Record<string, string>> = {
+  'zh-CN': { signIn: '邮箱登录', signOut: '退出登录', email: '邮箱地址', sendLink: '发送登录链接', checkEmail: '登录链接已发送，请查收邮箱。', inviteOnly: '仅受邀测试者可登录。', unavailable: '登录尚未配置。', needSignIn: '请先用邮箱登录，再在界面设置保存测试访问码。', codeMismatch: '此账户没有匹配的测试访问码；请在界面设置重新保存。', syncFailed: '访问码仅保存到本机；账户同步失败。' },
+  en: { signIn: 'Sign in by email', signOut: 'Sign out', email: 'Email address', sendLink: 'Send sign-in link', checkEmail: 'Sign-in link sent. Check your email.', inviteOnly: 'Sign-in is available to invited testers only.', unavailable: 'Sign-in is not configured yet.', needSignIn: 'Sign in by email, then save the test access code in Interface settings.', codeMismatch: 'This account has no matching test access code. Save it again in Interface settings.', syncFailed: 'Access code saved only on this device; account sync failed.' },
+  'zh-HK': { signIn: '電郵登入', signOut: '登出', email: '電郵地址', sendLink: '傳送登入連結', checkEmail: '登入連結已傳送，請查看電郵。', inviteOnly: '只限獲邀測試者登入。', unavailable: '登入尚未設定。', needSignIn: '請先用電郵登入，再在介面設定儲存測試存取碼。', codeMismatch: '此帳戶沒有相符的測試存取碼；請在介面設定重新儲存。', syncFailed: '存取碼只儲存在此裝置；帳戶同步失敗。' },
+  ja: { signIn: 'メールでログイン', signOut: 'ログアウト', email: 'メールアドレス', sendLink: 'ログインリンクを送信', checkEmail: 'ログインリンクを送信しました。メールを確認してください。', inviteOnly: '招待されたテスターのみログインできます。', unavailable: 'ログインはまだ設定されていません。', needSignIn: 'メールでログインしてから、表示設定でテストアクセスコードを保存してください。', codeMismatch: 'このアカウントには一致するテストアクセスコードがありません。表示設定で保存し直してください。', syncFailed: 'アクセスコードはこの端末にのみ保存されました。アカウント同期に失敗しました。' },
+};
 
 export function OralApp() {
   const [page, setPage] = useState<Page>('home'); const [language, setLanguage] = useState<LanguageId>('en'); const [mode, setMode] = useState<ModeId>('daily'); const [level, setLevel] = useState('Intermediate'); const [topic, setTopic] = useState('Everyday life');
@@ -57,6 +65,7 @@ export function OralApp() {
   const [audio, setAudio] = useState<Blob | null>(null); const [audioUrl, setAudioUrl] = useState(''); const [transcript, setTranscript] = useState(''); const [notice, setNotice] = useState(''); const [busy, setBusy] = useState(false); const [tab, setTab] = useState<'all' | LanguageId>('all');
   const [pendingAudioId, setPendingAudioId] = useState<string | null>(null); const [audioSaveFailed, setAudioSaveFailed] = useState(false);
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>('en'); const [theme, setTheme] = useState<Theme>('light'); const [settingsOpen, setSettingsOpen] = useState(false); const [draftUiLanguage, setDraftUiLanguage] = useState<UiLanguage>('en'); const [draftTheme, setDraftTheme] = useState<Theme>('light'); const [textProvider, setTextProvider] = useState<TextProvider>('deepseek'); const [accessCode, setAccessCode] = useState(''); const [draftTextProvider, setDraftTextProvider] = useState<TextProvider>('deepseek'); const [draftAccessCode, setDraftAccessCode] = useState('');
+  const [authOpen, setAuthOpen] = useState(false); const [authUser, setAuthUser] = useState<User | null>(null); const [authEmail, setAuthEmail] = useState(''); const [authBusy, setAuthBusy] = useState(false); const [authNotice, setAuthNotice] = useState('');
   const recorder = useRef<AudioRecorder | null>(null); const browserTranscriber = useRef<BrowserTranscriber | null>(null); const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingLock = useRef(false); const stopLock = useRef(false); const analysisLock = useRef(false); const submitLock = useRef(false); const evaluationLock = useRef(false);
   const transcriptionProgress = useRef<{ blob: Blob; parts: string[] } | null>(null);
@@ -69,6 +78,19 @@ export function OralApp() {
   useEffect(() => { localStorage.setItem('oral-text-provider', textProvider); }, [textProvider]);
   useEffect(() => { document.documentElement.lang = uiLanguage; document.title = `Oral — ${uiCopy[uiLanguage].studio}`; document.documentElement.dataset.theme = theme; localStorage.setItem('oral-ui-language', uiLanguage); localStorage.setItem('oral-theme', theme); }, [uiLanguage, theme]);
   useEffect(() => { if (accessCode) sessionStorage.setItem('oral-beta-access-code', accessCode); else sessionStorage.removeItem('oral-beta-access-code'); }, [accessCode]);
+  useEffect(() => {
+    const client = getSupabaseBrowser();
+    if (!client) return;
+    const applyUser = (user: User | null) => {
+      setAuthUser(user);
+      if (!user) { setAccessCode(''); return; }
+      const savedCode = user.user_metadata?.oral_beta_access_code;
+      if (typeof savedCode === 'string') setAccessCode(savedCode);
+    };
+    client.auth.getUser().then(({ data }) => applyUser(data.user));
+    const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => applyUser(session?.user || null));
+    return () => subscription.unsubscribe();
+  }, []);
   useEffect(() => { if (session) { saveSession(session); setSessions(getSessions()); } }, [session]);
   useEffect(() => { return () => { if (timer.current) clearInterval(timer.current); recorder.current?.dispose(); }; }, []);
   useEffect(() => { if (page !== 'speaking' && recorder.current?.state !== 'inactive') { recorder.current?.dispose(); if (timer.current) clearInterval(timer.current); setRecording(false); setPaused(false); } }, [page]);
@@ -105,12 +127,30 @@ export function OralApp() {
     if (window.history.state?.oralSettings) window.history.back();
     else setSettingsOpen(false);
   }
-  function confirmSettings() {
+  async function confirmSettings() {
     setUiLanguage(draftUiLanguage);
     setTheme(draftTheme);
     setTextProvider(draftTextProvider);
     setAccessCode(draftAccessCode);
+    const client = getSupabaseBrowser();
+    if (client && authUser) {
+      const { error } = await client.auth.updateUser({ data: { oral_beta_access_code: draftAccessCode.trim() } });
+      if (error) setNotice(authCopy[draftUiLanguage].syncFailed);
+    }
     closeSettings();
+  }
+  async function sendSignInLink() {
+    const client = getSupabaseBrowser();
+    if (!client) { setAuthNotice(authCopy[uiLanguage].unavailable); return; }
+    setAuthBusy(true); setAuthNotice('');
+    const { error } = await client.auth.signInWithOtp({ email: authEmail.trim(), options: { shouldCreateUser: false, emailRedirectTo: window.location.origin } });
+    setAuthBusy(false);
+    setAuthNotice(error ? error.message : authCopy[uiLanguage].checkEmail);
+  }
+  async function signOut() {
+    await getSupabaseBrowser()?.auth.signOut();
+    setAccessCode('');
+    setAuthOpen(false);
   }
   function chooseLanguage(id: LanguageId) { setLanguage(id); setLevel(id === 'ja' ? 'Beginner' : 'Intermediate'); setMode('daily'); setTopic(languages[id].topics.daily[0]); navigate('practice'); }
   function chooseMode(id: ModeId) { if (!modes[id].enabled) return; setMode(id); setTopic(config.topics[id]?.[0] || config.topics.daily[0]); navigate('setup'); }
@@ -181,7 +221,7 @@ export function OralApp() {
         const started = performance.now();
         const response = await fetch('/api/transcribe', {
           method: 'POST',
-          headers: { ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), 'x-speech-request-id': requestId, 'x-speech-chunk-index': String(index) },
+          headers: { ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()), 'x-speech-request-id': requestId, 'x-speech-chunk-index': String(index) },
           body: form,
         });
         const duration = Math.round(performance.now() - started);
@@ -201,7 +241,7 @@ export function OralApp() {
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'TRANSCRIPTION_FAILED';
       setSpeechDiagnostic(previous => ({ ...previous, uploadStatus: 'error', errorCode: reason }));
-      const detail = reason === 'BETA_DAILY_LIMIT_REACHED' ? speechErrors[uiLanguage].betaDailyLimit : reason === 'BETA_ACCESS_DENIED' ? speechErrors[uiLanguage].betaAccessDenied : reason === 'BETA_GUARD_NOT_CONFIGURED' ? speechErrors[uiLanguage].betaUnavailable : reason === 'GLM_NOT_CONFIGURED' ? speechErrors[uiLanguage].glmMissing : reason === 'GLM_KEY_INVALID' ? speechErrors[uiLanguage].glmInvalid : reason === 'GLM_QUOTA_OR_LIMIT' ? speechErrors[uiLanguage].glmQuota : reason === 'EMPTY_TRANSCRIPT' ? speechErrors[uiLanguage].emptyTranscript : speechErrors[uiLanguage].transcriptionFailed;
+      const detail = reason === 'AUTH_REQUIRED' ? authCopy[uiLanguage].needSignIn : reason === 'AUTH_ACCESS_CODE_MISMATCH' ? authCopy[uiLanguage].codeMismatch : reason === 'BETA_DAILY_LIMIT_REACHED' ? speechErrors[uiLanguage].betaDailyLimit : reason === 'BETA_ACCESS_DENIED' ? speechErrors[uiLanguage].betaAccessDenied : reason === 'BETA_GUARD_NOT_CONFIGURED' ? speechErrors[uiLanguage].betaUnavailable : reason === 'GLM_NOT_CONFIGURED' ? speechErrors[uiLanguage].glmMissing : reason === 'GLM_KEY_INVALID' ? speechErrors[uiLanguage].glmInvalid : reason === 'GLM_QUOTA_OR_LIMIT' ? speechErrors[uiLanguage].glmQuota : reason === 'EMPTY_TRANSCRIPT' ? speechErrors[uiLanguage].emptyTranscript : speechErrors[uiLanguage].transcriptionFailed;
       setNotice(parts.some(Boolean) ? `${speechErrors[uiLanguage].partialTranscript} ${detail}` : detail);
     } finally {
       analysisLock.current = false; setBusy(false); setProcessingStage('');
@@ -273,7 +313,7 @@ export function OralApp() {
       try {
         const response = await fetch('/api/ai', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(accessCode ? { 'x-beta-access-code': accessCode } : {}) },
+          headers: { 'Content-Type': 'application/json', ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()) },
           body: JSON.stringify({ action: 'next', provider: textProvider, language, mode, level, topic, questionSetId: session.examSetId, turns: updated.turns }),
         });
         const data = await response.json();
@@ -289,7 +329,7 @@ export function OralApp() {
       setBusy(false); submitLock.current = false;
     }
   }
-  async function finishSession(current: Session | null = session) { if (!current || evaluationLock.current || busy && current === session) return; evaluationLock.current = true; setBusy(true); setProcessingStage(voice.evaluating); setNotice(''); let evaluation = demoEvaluation(current.language, current.turns, uiLanguage); try { if (current.turns.length) { try { const response = await fetch('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(accessCode ? { 'x-beta-access-code': accessCode } : {}) }, body: JSON.stringify({ action: 'evaluate', provider: textProvider, uiLanguage, language: current.language, mode: current.mode, level: current.level, topic: current.topic, turns: current.turns }) }); const data = await response.json(); if (response.ok && data.evaluation) evaluation = data.evaluation; else if (data.error !== 'AI_NOT_CONFIGURED') setNotice(extra.demoFeedback); } catch { setNotice(extra.demoOffline); } } const done = speakingReducer(current, { type: 'EVALUATE', evaluation }); setSession(done); saveSession(done); navigate('result'); } finally { setBusy(false); setProcessingStage(''); evaluationLock.current = false; } }
+  async function finishSession(current: Session | null = session) { if (!current || evaluationLock.current || busy && current === session) return; evaluationLock.current = true; setBusy(true); setProcessingStage(voice.evaluating); setNotice(''); let evaluation = demoEvaluation(current.language, current.turns, uiLanguage); try { if (current.turns.length) { try { const response = await fetch('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()) }, body: JSON.stringify({ action: 'evaluate', provider: textProvider, uiLanguage, language: current.language, mode: current.mode, level: current.level, topic: current.topic, turns: current.turns }) }); const data = await response.json(); if (response.ok && data.evaluation) evaluation = data.evaluation; else if (data.error !== 'AI_NOT_CONFIGURED') setNotice(extra.demoFeedback); } catch { setNotice(extra.demoOffline); } } const done = speakingReducer(current, { type: 'EVALUATE', evaluation }); setSession(done); saveSession(done); navigate('result'); } finally { setBusy(false); setProcessingStage(''); evaluationLock.current = false; } }
   function retry(turn: Turn) { if (!session) return; setSession(s => s && speakingReducer(s, { type: 'RETRY', turnId: turn.id })); setTranscript(''); setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setPendingAudioId(null); setAudioSaveFailed(false); setSeconds(0); setNotice(extra.sameQuestion); setRetryExamPart(mode === 'ielts' ? turn.examPart || ieltsPartAt(topic, Math.max(0, session.turns.findIndex(item => item.id === turn.id))) : undefined); navigate('speaking'); }
   async function playAudio(id: string) { const blob = await getAudio(id); if (!blob) { setNotice(extra.audioMissing); return; } const url = URL.createObjectURL(blob); const player = new Audio(url); player.onended = () => URL.revokeObjectURL(url); player.play().catch(() => setNotice(extra.playback)); }
   function openSession(item: Session) { setSession(item); setLanguage(item.language); setMode(item.mode); setLevel(item.level); setTopic(item.topic); setRetryExamPart(undefined); navigate(item.evaluation ? 'result' : 'speaking'); }
@@ -303,7 +343,8 @@ export function OralApp() {
   }
 
   return <div className="app-shell"><div className="app-frame">
-    {page !== 'speaking' && page !== 'result' && <header className="topbar"><div className="brand"><span className="brand-mark"><AudioLines size={20} strokeWidth={2.5} /></span><span>oral<span className="brand-dot">.</span></span></div><div className="topbar-tools"><span className="topbar-caption">{text.studio}</span><button className="settings-button" aria-label={text.settings} onClick={openSettings}><Settings2 size={18} /></button></div></header>}
+    {page !== 'speaking' && page !== 'result' && <header className="topbar"><div className="brand"><span className="brand-mark"><AudioLines size={20} strokeWidth={2.5} /></span><span>oral<span className="brand-dot">.</span></span></div><div className="topbar-tools"><span className="topbar-caption">{text.studio}</span><button className="auth-button" aria-label={authUser ? authCopy[uiLanguage].signOut : authCopy[uiLanguage].signIn} onClick={() => setAuthOpen(true)}>{authUser ? (authUser.email?.slice(0, 1).toUpperCase() || <UserRound size={17} />) : <LogIn size={17} />}</button><button className="settings-button" aria-label={text.settings} onClick={openSettings}><Settings2 size={18} /></button></div></header>}
+    {authOpen && <div className="settings-backdrop" role="presentation" onClick={() => setAuthOpen(false)}><section className="auth-sheet" role="dialog" aria-modal="true" aria-label={authCopy[uiLanguage].signIn} onClick={event => event.stopPropagation()}><button className="settings-close auth-close" aria-label={text.close} onClick={() => setAuthOpen(false)}><X size={19} /></button>{authUser ? <><span className="section-kicker">ORAL ACCOUNT</span><h2>{authUser.email}</h2><p>{authCopy[uiLanguage].inviteOnly}</p><button className="primary-button" onClick={signOut}>{authCopy[uiLanguage].signOut} <LogOut size={19} /></button></> : <><span className="section-kicker">ORAL ACCOUNT</span><h2>{authCopy[uiLanguage].signIn}</h2><p>{authCopy[uiLanguage].inviteOnly}</p><label className="access-code-label" htmlFor="auth-email">{authCopy[uiLanguage].email}</label><input id="auth-email" className="access-code-input" type="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" /><button className="primary-button" disabled={authBusy || !authEmail.trim()} onClick={sendSignInLink}>{authBusy ? extra.processing : authCopy[uiLanguage].sendLink} <Mail size={19} /></button>{authNotice && <p className="auth-notice">{authNotice}</p>}</>}</section></div>}
     {settingsOpen && <div className="settings-backdrop" role="presentation" onClick={closeSettings}>
       <section className="settings-sheet" role="dialog" aria-modal="true" aria-label={uiCopy[draftUiLanguage].settings} onClick={event => event.stopPropagation()}>
         <div className="settings-head"><div><span className="section-kicker">ORAL</span><h2>{uiCopy[draftUiLanguage].settings}</h2><p>{uiCopy[draftUiLanguage].settingsHint}</p></div><button className="settings-close" aria-label={uiCopy[draftUiLanguage].close} onClick={closeSettings}><X size={19} /></button></div>

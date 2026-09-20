@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { AccountGuardError, guardAccountRequest } from '@/lib/auth/supabase-server';
 
 class GuardError extends Error {
   constructor(readonly code: 'BETA_GUARD_NOT_CONFIGURED' | 'BETA_ACCESS_DENIED' | 'BETA_DAILY_LIMIT_REACHED') { super(code); }
@@ -21,6 +22,7 @@ async function redis(command: string[]) {
 }
 
 export async function guardBetaRequest(request: Request) {
+  await guardAccountRequest(request);
   if (process.env.NODE_ENV !== 'production') return;
   const codes = setting('BETA_ACCESS_CODES')?.split(',').map(code => code.trim()).filter(Boolean) || [];
   const limit = Number(setting('BETA_DAILY_REQUEST_LIMIT'));
@@ -44,5 +46,6 @@ export async function guardBetaRequest(request: Request) {
 
 export function guardErrorResponse(error: unknown) {
   if (error instanceof GuardError) return { error: error.code, status: error.code === 'BETA_GUARD_NOT_CONFIGURED' ? 503 : 429 };
+  if (error instanceof AccountGuardError) return { error: error.code, status: 401 };
   return null;
 }
