@@ -17,7 +17,7 @@ function encodeWav(samples: Float32Array): File {
   return new File([bytes], 'answer.wav', { type: 'audio/wav' });
 }
 
-export async function recordedAudioToWavChunks(blob: Blob, measuredDurationSeconds?: number): Promise<File[]> {
+async function decodeToMono(blob: Blob, measuredDurationSeconds?: number): Promise<Float32Array> {
   const context = new AudioContext();
   try {
     const decoded = await context.decodeAudioData(await blob.arrayBuffer());
@@ -25,7 +25,7 @@ export async function recordedAudioToWavChunks(blob: Blob, measuredDurationSecon
     const sourceFrames = Math.min(...channels.map(channel => channel.length));
     const pcmDurationSeconds = sourceFrames / decoded.sampleRate;
     const durationSeconds = measuredDurationSeconds && measuredDurationSeconds > 0
-      ? Math.min(pcmDurationSeconds, measuredDurationSeconds + 1)
+      ? Math.min(pcmDurationSeconds, measuredDurationSeconds)
       : pcmDurationSeconds;
     const frames = Math.ceil(durationSeconds * SAMPLE_RATE);
     const mono = new Float32Array(frames);
@@ -37,11 +37,20 @@ export async function recordedAudioToWavChunks(blob: Blob, measuredDurationSecon
         mono[frame] += (source[low] + (source[high] - source[low]) * (position - low)) / channels.length;
       }
     }
-    const chunkFrames = SAMPLE_RATE * CHUNK_SECONDS;
-    const chunks: File[] = [];
-    for (let at = 0; at < mono.length; at += chunkFrames) chunks.push(encodeWav(mono.subarray(at, at + chunkFrames)));
-    return chunks;
+    return mono;
   } finally {
     await context.close();
   }
+}
+
+export async function normalizeRecordedAudio(blob: Blob, measuredDurationSeconds?: number): Promise<File> {
+  return encodeWav(await decodeToMono(blob, measuredDurationSeconds));
+}
+
+export async function recordedAudioToWavChunks(blob: Blob, measuredDurationSeconds?: number): Promise<File[]> {
+  const mono = await decodeToMono(blob, measuredDurationSeconds);
+  const chunkFrames = SAMPLE_RATE * CHUNK_SECONDS;
+  const chunks: File[] = [];
+  for (let at = 0; at < mono.length; at += chunkFrames) chunks.push(encodeWav(mono.subarray(at, at + chunkFrames)));
+  return chunks;
 }

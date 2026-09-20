@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { recordedAudioToWavChunks } from './wav';
+import { normalizeRecordedAudio, recordedAudioToWavChunks } from './wav';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -40,5 +40,23 @@ describe('recorded audio chunking', () => {
 
     expect(chunks).toHaveLength(1);
     expect(chunks[0].size).toBe(44 + samples.length * 2);
+  });
+
+  it('normalizes playback audio to a WAV with an explicit sample-based duration', async () => {
+    const samples = new Float32Array(1.25 * 16_000);
+    vi.stubGlobal('AudioContext', class {
+      decodeAudioData = async () => ({
+        duration: 69,
+        numberOfChannels: 1,
+        sampleRate: 16_000,
+        getChannelData: () => samples,
+      });
+      close = vi.fn().mockResolvedValue(undefined);
+    });
+
+    const normalized = await normalizeRecordedAudio(new Blob(['recorded']), 1.25);
+
+    expect(normalized.type).toBe('audio/wav');
+    expect(normalized.size).toBe(44 + samples.length * 2);
   });
 });

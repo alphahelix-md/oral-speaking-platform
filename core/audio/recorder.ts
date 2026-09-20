@@ -24,6 +24,10 @@ export class AudioRecorder {
   }
   pause(): void { if (this.recorder?.state === 'recording') { this.recorder.pause(); this.elapsed += performance.now() - this.startTime; } }
   resume(): void { if (this.recorder?.state === 'paused') { this.startTime = performance.now(); this.recorder.resume(); } }
+  get elapsedSeconds(): number {
+    const active = this.recorder?.state === 'recording' ? performance.now() - this.startTime : 0;
+    return Math.max(0, Math.round((this.elapsed + active) / 1000));
+  }
   get state(): RecordingState | 'inactive' { return this.recorder?.state || 'inactive'; }
   stop(): Promise<RecordedAnswer> {
     return new Promise((resolve, reject) => {

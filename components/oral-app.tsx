@@ -8,7 +8,7 @@ import { createSession, speakingReducer } from '@/core/speaking/engine';
 import { getSessions, getStats, saveSession } from '@/core/session/storage';
 import { AudioRecorder } from '@/core/audio/recorder';
 import { BrowserTranscriber, browserTranscriptionSupported } from '@/core/audio/browser-transcriber';
-import { recordedAudioToWavChunks } from '@/core/audio/wav';
+import { normalizeRecordedAudio, recordedAudioToWavChunks } from '@/core/audio/wav';
 import { getAudio, saveAudio, updateAudioMetadata } from '@/core/audio/store';
 import { RecordingLibrary } from '@/components/recording-library';
 import { speechUi, speechErrors } from '@/lib/speech/ui-copy';
@@ -81,17 +81,6 @@ const transcriptionLanguageMismatch: Record<UiLanguage, string> = {
   ja: '文字起こし結果が練習中の言語ではありません。再分析するか手入力してください。',
 };
 
-async function availableSpeechVoices(): Promise<SpeechSynthesisVoice[]> {
-  const synth = window.speechSynthesis;
-  const immediate = synth.getVoices();
-  if (immediate.length) return immediate;
-  await new Promise<void>(resolve => {
-    const finish = () => { window.clearTimeout(timeout); synth.removeEventListener('voiceschanged', finish); resolve(); };
-    const timeout = window.setTimeout(finish, 900);
-    synth.addEventListener('voiceschanged', finish, { once: true });
-  });
-  return synth.getVoices();
-}
 const authCopy: Record<UiLanguage, Record<string, string>> = {
   'zh-CN': { signIn: '邮箱登录', signOut: '退出登录', email: '邮箱地址', sendLink: '发送登录链接', checkEmail: '登录链接已发送，请查收邮箱。', emailLimited: '登录邮件发送过于频繁，请稍后重试。多人测试前建议配置自有 SMTP。', inviteOnly: '测试者可用邮箱注册；使用功能仍需测试访问码。', unavailable: '登录尚未配置。', needSignIn: '请先用邮箱登录，再在界面设置保存测试访问码。', codeMismatch: '此账户没有匹配的测试访问码；请在界面设置重新保存。', syncFailed: '访问码仅保存到本机；账户同步失败。', active: '账号已登录，访问码与授权设置可跨设备恢复。' },
   en: { signIn: 'Sign in by email', signOut: 'Sign out', email: 'Email address', sendLink: 'Send sign-in link', checkEmail: 'Sign-in link sent. Check your email.', emailLimited: 'Too many sign-in emails. Try again later. Configure custom SMTP before multi-user testing.', inviteOnly: 'Testers may register by email; a test access code is still required.', unavailable: 'Sign-in is not configured yet.', needSignIn: 'Sign in by email, then save the test access code in Interface settings.', codeMismatch: 'This account has no matching test access code. Save it again in Interface settings.', syncFailed: 'Access code saved only on this device; account sync failed.', active: 'Signed in. Access-code and consent settings restore across devices.' },
@@ -252,17 +241,17 @@ export function OralApp() {
   async function speakQuestion() {
     if (!('speechSynthesis' in window) || !session) return;
     const preferredLocale = session.language === 'en' && session.mode === 'ielts' ? 'en-GB' : languages[session.language].speechLocale;
-    const selectedVoice = selectLearningVoice(await availableSpeechVoices(), session.language, preferredLocale);
-    if (!selectedVoice) { setNotice(questionVoiceUnavailable[uiLanguage]); return; }
+    const selectedVoice = selectLearningVoice(speechSynthesis.getVoices(), session.language, preferredLocale);
     speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(session.question);
-    utterance.voice = selectedVoice;
-    utterance.lang = selectedVoice.lang;
+    if (selectedVoice) utterance.voice = selectedVoice;
+    utterance.lang = selectedVoice?.lang || preferredLocale;
     utterance.rate = session.language === 'ja' ? (session.level === 'Beginner' ? 0.82 : 0.9) : 0.9;
     utterance.pitch = 1.02;
     utterance.volume = 1;
     utterance.onerror = () => setNotice(questionVoiceUnavailable[uiLanguage]);
     setNotice('');
+    speechSynthesis.resume();
     speechSynthesis.speak(utterance);
   }
   async function beginRecording() {
@@ -294,7 +283,7 @@ export function OralApp() {
       if (freeStarted) setProcessingStage(voice.transcribing); else setNotice(extra.transcription);
       setRecording(true); setPaused(false);
       setSession(s => s && speakingReducer(s, { type: 'STATUS', status: 'recording' }));
-      timer.current = setInterval(() => setSeconds(n => n + 1), 1000);
+      timer.current = setInterval(() => setSeconds(next.elapsedSeconds), 250);
     } catch (error) {
       setNotice(error instanceof DOMException && error.name === 'NotAllowedError' ? extra.micUnavailable : extra.recordFailed);
       setSpeechDiagnostic(previous => ({ ...previous, errorCode: error instanceof Error ? error.name : 'RECORDING_START_FAILED' }));
@@ -365,10 +354,13 @@ export function OralApp() {
       setSpeechDiagnostic(previous => ({ ...previous, recordedMime: result.blob.type, blobSize: result.blob.size, durationSeconds: result.metrics.durationSeconds }));
       if (process.env.NEXT_PUBLIC_SPEECH_DEBUG === 'true') console.info('[SPEECH_BLOB]', { requestId: speechRequestId.current, blobSize: result.blob.size, blobType: result.blob.type, duration: result.metrics.durationSeconds });
       if (result.blob.size === 0) { setNotice(voice.empty); return; }
-      setAudio(result.blob); setAudioMetrics(result.metrics); setSeconds(result.seconds);
+      let stableAudio = result.blob;
+      try { stableAudio = await normalizeRecordedAudio(result.blob, result.metrics.durationSeconds); }
+      catch { /* Keep the original only when this browser cannot decode its own recording. */ }
+      setAudio(stableAudio); setAudioMetrics(result.metrics); setSeconds(result.seconds);
       const audioId = crypto.randomUUID();
       try {
-        await saveAudio(audioId, result.blob, { createdAt: new Date().toISOString(), language, mode, question: session?.question, durationSeconds: result.seconds, sessionId: session?.id });
+        await saveAudio(audioId, stableAudio, { createdAt: new Date().toISOString(), language, mode, question: session?.question, durationSeconds: result.seconds, sessionId: session?.id });
         setPendingAudioId(audioId);
         setAudioSaveFailed(false);
       } catch {
@@ -380,7 +372,7 @@ export function OralApp() {
         setTranscript(freeText);
         setTranscriptResult({ text: freeText, language, provider: 'browser-speech-recognition' });
         setSpeechDiagnostic(previous => ({ ...previous, provider: 'browser-speech-recognition', uploadStatus: 'not needed' }));
-      } else await analyzeAudio(result.blob, result.metrics.durationSeconds);
+      } else await analyzeAudio(stableAudio, result.metrics.durationSeconds);
     } catch (error) {
       setNotice(extra.recordFailed);
       setSpeechDiagnostic(previous => ({ ...previous, errorCode: error instanceof Error ? error.name : 'RECORDING_STOP_FAILED' }));
@@ -474,7 +466,7 @@ export function OralApp() {
     </div>}
     <main className={`main-content ${page === 'speaking' || page === 'result' ? 'full-height' : ''}`}>
       {(page === 'progress' || page === 'profile' || page === 'recordings') && <button className="text-back" onClick={goBack}><ArrowLeft size={18} /> {extra.back}</button>}
-      {page === 'speaking' && audioSaveFailed && <div className="notice" role="alert">{text.audioSaveFailed}{audioUrl && <a className="unsaved-download" href={audioUrl} download={`oral-unsaved.${audio?.type.includes('mp4') ? 'm4a' : audio?.type.includes('ogg') ? 'ogg' : 'webm'}`}>{downloadAudioLabel[uiLanguage]}</a>}</div>}
+      {page === 'speaking' && audioSaveFailed && <div className="notice" role="alert">{text.audioSaveFailed}{audioUrl && <a className="unsaved-download" href={audioUrl} download={`oral-unsaved.${audio?.type.includes('wav') ? 'wav' : audio?.type.includes('mp4') ? 'm4a' : audio?.type.includes('ogg') ? 'ogg' : 'webm'}`}>{downloadAudioLabel[uiLanguage]}</a>}</div>}
       {page === 'speaking' && (!accessCode || speechDiagnostic.errorCode === 'BETA_ACCESS_DENIED') && <div className="notice access-code-reminder" role="status">{accessCodeReminder[uiLanguage]} <button type="button" onClick={openSettings}>{editAccessCodeLabel[uiLanguage]}</button></div>}
       {page === 'home' && <><div className="hero"><div className="eyebrow"><span className="live-dot" /> {text.daily}</div><h1>{text.voice}<br /><em>{text.further}</em></h1><p>{text.intro}</p><div className="hero-art" aria-hidden="true"><div className="art-ring ring-one" /><div className="art-ring ring-two" /><AudioLines size={56} strokeWidth={1.5} /></div></div><div className="section-head"><div><span className="section-kicker">{text.begin}</span><h2>{text.choose}</h2></div><span className="section-number">01 / 02</span></div><div className="language-list">{(['en', 'ja'] as const).map(id => <button className={`language-card ${id}`} key={id} onClick={() => chooseLanguage(id)}><span className="language-symbol">{languages[id].flag}</span><span className="language-copy"><strong>{studyName(id)} <span className="native-name">{id === 'ja' && uiLanguage !== 'ja' ? '日本語' : ''}</span></strong><small>{id === 'en' ? extra.enLearn : extra.jaLearn}</small></span><span className="round-arrow"><ArrowRight size={19} /></span></button>)}</div><div className="quick-stats"><div><span>{text.journey}</span><strong>{stats.sessions.toString().padStart(2, '0')}</strong><small>{text.sessions}</small></div><div><span>&nbsp;</span><strong>{stats.minutes.toString().padStart(2, '0')}</strong><small>{text.minutes}</small></div><div><span>&nbsp;</span><strong>—</strong><small>{text.streak}</small></div></div><p className="fine-print">* {extra.streakNote}</p>{sessions.length > 0 && <><div className="section-head compact"><h2>{extra.resume}</h2></div><button className="recent-card" onClick={() => openSession(sessions[0])}><span className="recent-icon">{languages[sessions[0].language].flag}</span><span><strong>{modeText(sessions[0].mode).title}</strong><small>{new Date(sessions[0].startedAt).toLocaleDateString(dateLocale)} · {sessions[0].turns.length} {extra.answers}</small></span><ChevronRight size={18} /></button></>}</>}
       {page === 'practice' && <><button className="text-back" onClick={goBack}><ArrowLeft size={18} /> {extra.back}</button><div className="page-intro"><span className="section-kicker">{config.flag} / {config.nativeName.toUpperCase()}</span><h1>{extra.today}<br /><em>{extra.todayEm}</em></h1><p>{extra.chooseSpace}</p></div><div className="language-switch"><button className={language === 'en' ? 'selected' : ''} onClick={() => chooseLanguage('en')}>{extra.english}</button><button className={language === 'ja' ? 'selected' : ''} onClick={() => chooseLanguage('ja')}>{extra.japanese}</button></div><div className="mode-list">{config.modes.map(id => { const item = modes[id]; const Icon = iconMap[id]; return <button key={id} disabled={!item.enabled} className={`mode-card ${!item.enabled ? 'disabled' : ''}`} onClick={() => chooseMode(id)}><span className="mode-icon"><Icon size={23} strokeWidth={1.8} /></span><span className="mode-copy"><strong>{modeText(id).title}</strong><small>{modeText(id).short}</small></span>{item.enabled ? <ChevronRight size={19} /> : <span className="soon">{extra.soon}</span>}</button>; })}</div>{language === 'ja' && <div className="info-note"><CircleHelp size={18} /><span>{extra.jlptNote}</span></div>}</>}
