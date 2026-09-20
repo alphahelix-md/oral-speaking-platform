@@ -23,4 +23,22 @@ describe('recorded audio chunking', () => {
     expect(chunks.every(chunk => chunk.type === 'audio/wav')).toBe(true);
     expect(close).toHaveBeenCalledOnce();
   });
+
+  it('uses PCM sample length when Android WebM reports a corrupt duration', async () => {
+    const samples = new Float32Array(1.2 * 16_000);
+    vi.stubGlobal('AudioContext', class {
+      decodeAudioData = async () => ({
+        duration: 69,
+        numberOfChannels: 1,
+        sampleRate: 16_000,
+        getChannelData: () => samples,
+      });
+      close = vi.fn().mockResolvedValue(undefined);
+    });
+
+    const chunks = await recordedAudioToWavChunks(new Blob(['recorded']), 1.2);
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].size).toBe(44 + samples.length * 2);
+  });
 });

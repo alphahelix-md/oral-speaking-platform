@@ -36,12 +36,19 @@ export async function guardBetaRequest(request: Request) {
   const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
   const day = new Date().toISOString().slice(0, 10);
   const fingerprint = createHash('sha256').update(`${code}:${ip}`).digest('hex').slice(0, 24);
-  const key = `oral:beta:${day}:${fingerprint}`;
+  const key = `oral:beta:v2:${day}:${fingerprint}`;
+  const speechRequestId = request.headers.get('x-speech-request-id')?.trim() || '';
+  const isChunkedSpeech = /^sp_[a-zA-Z0-9_-]{6,64}$/.test(speechRequestId);
+  const recordingKey = isChunkedSpeech
+    ? `oral:beta:v2:recording:${day}:${fingerprint}:${createHash('sha256').update(speechRequestId).digest('hex').slice(0, 24)}`
+    : '';
+  if (recordingKey && (await redis(['get', recordingKey])).result) return;
   const current = Number((await redis(['get', key])).result || 0);
   if (current >= limit) throw new GuardError('BETA_DAILY_LIMIT_REACHED');
   const next = Number((await redis(['incr', key])).result);
   if (next === 1) await redis(['expire', key, '86400']);
   if (next > limit) throw new GuardError('BETA_DAILY_LIMIT_REACHED');
+  if (recordingKey) await redis(['set', recordingKey, '1', 'ex', '86400']);
 }
 
 export function guardErrorResponse(error: unknown) {

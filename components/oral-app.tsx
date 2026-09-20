@@ -254,7 +254,7 @@ export function OralApp() {
     } finally { setProcessingStage(''); recordingLock.current = false; }
   }
   function togglePause() { if (!recorder.current) return; if (paused) recorder.current.resume(); else recorder.current.pause(); setPaused(!paused); }
-  async function analyzeAudio(blob: Blob) {
+  async function analyzeAudio(blob: Blob, measuredDurationSeconds?: number) {
     if (analysisLock.current) return;
     analysisLock.current = true; setBusy(true); setProcessingStage(voice.transcribing);
     const parts = transcriptionProgress.current?.blob === blob ? [...transcriptionProgress.current.parts] : [];
@@ -263,7 +263,7 @@ export function OralApp() {
     speechRequestId.current = requestId;
     setSpeechDiagnostic(previous => ({ ...previous, requestId, uploadStatus: 'converting audio' }));
     try {
-      const chunks = await recordedAudioToWavChunks(blob);
+      const chunks = await recordedAudioToWavChunks(blob, measuredDurationSeconds);
       if (!chunks.length) throw new Error('EMPTY_AUDIO');
       for (const [index, chunk] of chunks.entries()) {
         if (index in parts) continue;
@@ -333,7 +333,7 @@ export function OralApp() {
         setTranscript(freeText);
         setTranscriptResult({ text: freeText, language, provider: 'browser-speech-recognition' });
         setSpeechDiagnostic(previous => ({ ...previous, provider: 'browser-speech-recognition', uploadStatus: 'not needed' }));
-      } else await analyzeAudio(result.blob);
+      } else await analyzeAudio(result.blob, result.metrics.durationSeconds);
     } catch (error) {
       setNotice(extra.recordFailed);
       setSpeechDiagnostic(previous => ({ ...previous, errorCode: error instanceof Error ? error.name : 'RECORDING_STOP_FAILED' }));

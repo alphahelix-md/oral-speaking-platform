@@ -109,7 +109,7 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
     const parts = [...(entry.metadata?.transcriptionChunks || [])];
     setError(''); setErrorCode(''); setTranscribingId(entry.id);
     try {
-      const chunks = await recordedAudioToWavChunks(entry.blob);
+      const chunks = await recordedAudioToWavChunks(entry.blob, entry.metadata?.durationSeconds);
       if (!chunks.length) throw new Error('EMPTY_TRANSCRIPT');
       const requestId = 'sp_' + Date.now().toString(36) + '_' + crypto.randomUUID().slice(0, 8);
       for (const [index, chunk] of chunks.entries()) {

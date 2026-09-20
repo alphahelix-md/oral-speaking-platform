@@ -11,7 +11,11 @@ export class AudioRecorder {
   async start(): Promise<void> {
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error('Recording is unsupported in this browser. Use HTTPS or localhost.');
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: true }); this.chunks = []; this.elapsed = 0; this.samples = [];
-    const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'].find(t => MediaRecorder.isTypeSupported(t));
+    const isAndroid = /Android/i.test(navigator.userAgent || '');
+    const mimeTypes = isAndroid
+      ? ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm']
+      : ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'];
+    const mimeType = mimeTypes.find(t => MediaRecorder.isTypeSupported(t));
     try { this.recorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : undefined); } catch (error) { this.stream.getTracks().forEach(track => track.stop()); throw error; }
     this.recorder.ondataavailable = event => { if (event.data.size) this.chunks.push(event.data); };
     try { this.context = new AudioContext(); const source = this.context.createMediaStreamSource(this.stream); this.analyser = this.context.createAnalyser(); this.analyser.fftSize = 2048; source.connect(this.analyser); } catch { this.analyser = undefined; }

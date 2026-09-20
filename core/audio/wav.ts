@@ -17,19 +17,24 @@ function encodeWav(samples: Float32Array): File {
   return new File([bytes], 'answer.wav', { type: 'audio/wav' });
 }
 
-export async function recordedAudioToWavChunks(blob: Blob): Promise<File[]> {
+export async function recordedAudioToWavChunks(blob: Blob, measuredDurationSeconds?: number): Promise<File[]> {
   const context = new AudioContext();
   try {
     const decoded = await context.decodeAudioData(await blob.arrayBuffer());
-    const frames = Math.ceil(decoded.duration * SAMPLE_RATE);
+    const channels = Array.from({ length: decoded.numberOfChannels }, (_, channel) => decoded.getChannelData(channel));
+    const sourceFrames = Math.min(...channels.map(channel => channel.length));
+    const pcmDurationSeconds = sourceFrames / decoded.sampleRate;
+    const durationSeconds = measuredDurationSeconds && measuredDurationSeconds > 0
+      ? Math.min(pcmDurationSeconds, measuredDurationSeconds + 1)
+      : pcmDurationSeconds;
+    const frames = Math.ceil(durationSeconds * SAMPLE_RATE);
     const mono = new Float32Array(frames);
-    for (let channel = 0; channel < decoded.numberOfChannels; channel++) {
-      const source = decoded.getChannelData(channel);
+    for (const source of channels) {
       for (let frame = 0; frame < frames; frame++) {
         const position = frame * decoded.sampleRate / SAMPLE_RATE;
         const low = Math.min(source.length - 1, Math.floor(position));
         const high = Math.min(source.length - 1, low + 1);
-        mono[frame] += (source[low] + (source[high] - source[low]) * (position - low)) / decoded.numberOfChannels;
+        mono[frame] += (source[low] + (source[high] - source[low]) * (position - low)) / channels.length;
       }
     }
     const chunkFrames = SAMPLE_RATE * CHUNK_SECONDS;
