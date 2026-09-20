@@ -14,6 +14,8 @@ export type AudioMetadata = {
   trainingConsent: boolean;
   trainingStoragePath?: string;
   trainingUploadedAt?: string;
+  trainingUploadStatus?: 'pending' | 'uploaded' | 'failed';
+  trainingUploadError?: string;
 };
 
 export type AudioLibraryEntry = { id: string; blob: Blob; metadata: AudioMetadata | null };

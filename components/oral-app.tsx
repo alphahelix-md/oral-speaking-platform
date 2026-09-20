@@ -21,6 +21,8 @@ import { ieltsQuestionSets } from '@/exams/ielts/bank';
 import type { LanguageId, ModeId, Session, Turn } from '@/types/speaking';
 import { getSupabaseAuthHeaders, getSupabaseBrowser } from '@/lib/auth/supabase-browser';
 import { deleteMyTrainingAudio, uploadTrainingAudio } from '@/lib/audio/training-upload';
+import { matchesTranscriptionLanguage } from '@/lib/speech/language-boundary';
+import { selectLearningVoice } from '@/lib/speech/voice-selection';
 import type { User } from '@supabase/supabase-js';
 
 type Page = 'home' | 'practice' | 'setup' | 'speaking' | 'result' | 'progress' | 'profile' | 'recordings';
@@ -60,6 +62,36 @@ const localRecordingDisclosure: Record<UiLanguage, string> = {
   'zh-HK': '停止錄音後，原音會儲存在此瀏覽器；轉寫時可能傳送至語音服務。只有明確同意後，往後錄音才會上傳至私人訓練庫。',
   ja: '録音はこのブラウザに保存され、文字起こしでは音声サービスへ送信される場合があります。明示的な同意後のみ、今後の録音を非公開の学習ライブラリへアップロードします。',
 };
+const questionVoiceUnavailable: Record<UiLanguage, string> = {
+  'zh-CN': '本机没有当前练习语言的语音包。请在手机“文字转语音”设置中安装英语或日语语音。',
+  en: 'No matching voice is installed. Install an English or Japanese text-to-speech voice in device settings.',
+  'zh-HK': '本機沒有目前練習語言的語音套件。請在手機文字轉語音設定中安裝英語或日語語音。',
+  ja: '練習言語に対応する音声がありません。端末の読み上げ設定で英語または日本語音声をインストールしてください。',
+};
+const nextQuestionFallback: Record<UiLanguage, string> = {
+  'zh-CN': '下一题 AI 生成暂不可用，已使用本地备用问题；这不代表录音上传失败。',
+  en: 'AI question generation is temporarily unavailable, so a local fallback question is used. This does not mean the audio upload failed.',
+  'zh-HK': '下一題 AI 生成暫時無法使用，已改用本機備用問題；這不代表錄音上傳失敗。',
+  ja: '次の質問の AI 生成を一時的に利用できないため、端末内の予備質問を使用します。録音のアップロード失敗を意味するものではありません。',
+};
+const transcriptionLanguageMismatch: Record<UiLanguage, string> = {
+  'zh-CN': '识别结果不是当前练习语言，请重新分析或手动输入。',
+  en: 'The result was not in the practice language. Retry analysis or type your answer.',
+  'zh-HK': '辨識結果不是目前練習語言，請重新分析或手動輸入。',
+  ja: '文字起こし結果が練習中の言語ではありません。再分析するか手入力してください。',
+};
+
+async function availableSpeechVoices(): Promise<SpeechSynthesisVoice[]> {
+  const synth = window.speechSynthesis;
+  const immediate = synth.getVoices();
+  if (immediate.length) return immediate;
+  await new Promise<void>(resolve => {
+    const finish = () => { window.clearTimeout(timeout); synth.removeEventListener('voiceschanged', finish); resolve(); };
+    const timeout = window.setTimeout(finish, 900);
+    synth.addEventListener('voiceschanged', finish, { once: true });
+  });
+  return synth.getVoices();
+}
 const authCopy: Record<UiLanguage, Record<string, string>> = {
   'zh-CN': { signIn: '邮箱登录', signOut: '退出登录', email: '邮箱地址', sendLink: '发送登录链接', checkEmail: '登录链接已发送，请查收邮箱。', emailLimited: '登录邮件发送过于频繁，请稍后重试。多人测试前建议配置自有 SMTP。', inviteOnly: '测试者可用邮箱注册；使用功能仍需测试访问码。', unavailable: '登录尚未配置。', needSignIn: '请先用邮箱登录，再在界面设置保存测试访问码。', codeMismatch: '此账户没有匹配的测试访问码；请在界面设置重新保存。', syncFailed: '访问码仅保存到本机；账户同步失败。', active: '账号已登录，访问码与授权设置可跨设备恢复。' },
   en: { signIn: 'Sign in by email', signOut: 'Sign out', email: 'Email address', sendLink: 'Send sign-in link', checkEmail: 'Sign-in link sent. Check your email.', emailLimited: 'Too many sign-in emails. Try again later. Configure custom SMTP before multi-user testing.', inviteOnly: 'Testers may register by email; a test access code is still required.', unavailable: 'Sign-in is not configured yet.', needSignIn: 'Sign in by email, then save the test access code in Interface settings.', codeMismatch: 'This account has no matching test access code. Save it again in Interface settings.', syncFailed: 'Access code saved only on this device; account sync failed.', active: 'Signed in. Access-code and consent settings restore across devices.' },
@@ -217,7 +249,22 @@ export function OralApp() {
     setRetryExamPart(undefined);
     navigate('speaking');
   }
-  function speakQuestion() { if (!('speechSynthesis' in window) || !session) return; speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(session.question); utterance.lang = languages[session.language].speechLocale; utterance.rate = session.language === 'ja' && session.level === 'Beginner' ? 0.83 : 0.95; speechSynthesis.speak(utterance); }
+  async function speakQuestion() {
+    if (!('speechSynthesis' in window) || !session) return;
+    const preferredLocale = session.language === 'en' && session.mode === 'ielts' ? 'en-GB' : languages[session.language].speechLocale;
+    const selectedVoice = selectLearningVoice(await availableSpeechVoices(), session.language, preferredLocale);
+    if (!selectedVoice) { setNotice(questionVoiceUnavailable[uiLanguage]); return; }
+    speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(session.question);
+    utterance.voice = selectedVoice;
+    utterance.lang = selectedVoice.lang;
+    utterance.rate = session.language === 'ja' ? (session.level === 'Beginner' ? 0.82 : 0.9) : 0.9;
+    utterance.pitch = 1.02;
+    utterance.volume = 1;
+    utterance.onerror = () => setNotice(questionVoiceUnavailable[uiLanguage]);
+    setNotice('');
+    speechSynthesis.speak(utterance);
+  }
   async function beginRecording() {
     if (authUser && trainingConsent === 'unset') { setConsentOpen(true); return; }
     await startRecordingNow();
@@ -295,7 +342,7 @@ export function OralApp() {
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'TRANSCRIPTION_FAILED';
       setSpeechDiagnostic(previous => ({ ...previous, uploadStatus: 'error', errorCode: reason }));
-      const detail = reason === 'AUTH_REQUIRED' ? authCopy[uiLanguage].needSignIn : reason === 'AUTH_ACCESS_CODE_MISMATCH' ? authCopy[uiLanguage].codeMismatch : reason === 'BETA_DAILY_LIMIT_REACHED' ? speechErrors[uiLanguage].betaDailyLimit : reason === 'BETA_ACCESS_DENIED' ? speechErrors[uiLanguage].betaAccessDenied : reason === 'BETA_GUARD_NOT_CONFIGURED' ? speechErrors[uiLanguage].betaUnavailable : reason === 'GLM_NOT_CONFIGURED' ? speechErrors[uiLanguage].glmMissing : reason === 'GLM_KEY_INVALID' ? speechErrors[uiLanguage].glmInvalid : reason === 'GLM_QUOTA_OR_LIMIT' ? speechErrors[uiLanguage].glmQuota : reason === 'EMPTY_TRANSCRIPT' ? speechErrors[uiLanguage].emptyTranscript : speechErrors[uiLanguage].transcriptionFailed;
+      const detail = reason === 'AUTH_REQUIRED' ? authCopy[uiLanguage].needSignIn : reason === 'AUTH_ACCESS_CODE_MISMATCH' ? authCopy[uiLanguage].codeMismatch : reason === 'BETA_DAILY_LIMIT_REACHED' ? speechErrors[uiLanguage].betaDailyLimit : reason === 'BETA_ACCESS_DENIED' ? speechErrors[uiLanguage].betaAccessDenied : reason === 'BETA_GUARD_NOT_CONFIGURED' ? speechErrors[uiLanguage].betaUnavailable : reason === 'GLM_NOT_CONFIGURED' ? speechErrors[uiLanguage].glmMissing : reason === 'GLM_KEY_INVALID' ? speechErrors[uiLanguage].glmInvalid : reason === 'GLM_QUOTA_OR_LIMIT' ? speechErrors[uiLanguage].glmQuota : reason === 'TRANSCRIPT_LANGUAGE_MISMATCH' ? transcriptionLanguageMismatch[uiLanguage] : reason === 'EMPTY_TRANSCRIPT' ? speechErrors[uiLanguage].emptyTranscript : speechErrors[uiLanguage].transcriptionFailed;
       setNotice(parts.some(Boolean) ? `${speechErrors[uiLanguage].partialTranscript} ${detail}` : detail);
     } finally {
       analysisLock.current = false; setBusy(false); setProcessingStage('');
@@ -329,7 +376,7 @@ export function OralApp() {
         setAudioSaveFailed(true);
       }
       if (result.metrics.durationSeconds < 0.8) { setNotice(voice.short); return; }
-      if (freeText) {
+      if (freeText && matchesTranscriptionLanguage(freeText, language)) {
         setTranscript(freeText);
         setTranscriptResult({ text: freeText, language, provider: 'browser-speech-recognition' });
         setSpeechDiagnostic(previous => ({ ...previous, provider: 'browser-speech-recognition', uploadStatus: 'not needed' }));
@@ -353,10 +400,15 @@ export function OralApp() {
       if (audioId) await updateAudioMetadata(audioId, { turnId: updated.turns[updated.turns.length - 1]?.id, transcript: transcript.trim() });
       if (audioId && audio && authUser && trainingConsent === 'training') {
         const uploadInput = { id: audioId, audio, language, mode, question: session.question, transcript: transcript.trim(), durationSeconds: seconds };
-        void uploadTrainingAudio(uploadInput).then(path =>
-          updateAudioMetadata(audioId, { trainingConsent: true, trainingStoragePath: path, trainingUploadedAt: new Date().toISOString() })
-        ).catch(error => {
+        await updateAudioMetadata(audioId, { trainingConsent: true, trainingUploadStatus: 'pending', trainingUploadError: undefined });
+        window.dispatchEvent(new CustomEvent('oral-training-upload-state'));
+        void uploadTrainingAudio(uploadInput).then(async path => {
+          await updateAudioMetadata(audioId, { trainingConsent: true, trainingStoragePath: path, trainingUploadedAt: new Date().toISOString(), trainingUploadStatus: 'uploaded', trainingUploadError: undefined });
+          window.dispatchEvent(new CustomEvent('oral-training-upload-state'));
+        }).catch(async error => {
           const code = error instanceof Error ? error.message : 'TRAINING_UPLOAD_UNKNOWN';
+          await updateAudioMetadata(audioId, { trainingConsent: true, trainingUploadStatus: 'failed', trainingUploadError: code }).catch(() => undefined);
+          window.dispatchEvent(new CustomEvent('oral-training-upload-state'));
           setNotice(`${consentCopy[uiLanguage].uploadFailed} [${code}]`);
         });
       }
@@ -378,12 +430,12 @@ export function OralApp() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()) },
           body: JSON.stringify({ action: 'next', provider: textProvider, language, mode, level, topic, questionSetId: session.examSetId, turns: updated.turns }),
-        }, 10_000);
+        }, 20_000);
         const data = await response.json();
         if (response.ok && data.question) question = data.question;
-        else if (data.error !== 'AI_NOT_CONFIGURED') setNotice(extra.unavailable);
+        else if (data.error !== 'AI_NOT_CONFIGURED') setNotice(nextQuestionFallback[uiLanguage]);
       } catch {
-        setNotice(extra.offline);
+        setNotice(nextQuestionFallback[uiLanguage]);
       }
       setSession(s => s && speakingReducer(s, { type: 'QUESTION', question }));
     } catch {

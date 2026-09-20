@@ -17,11 +17,11 @@ const recoveryCopy = {
   ja: { retry: '再度文字起こし', working: '文字起こし中', editCode: 'アクセスコードを確認', unknownLanguage: 'この古い録音の言語を特定できません。', copied: 'コピー済み', copy: '文字起こしをコピー' },
 } satisfies Record<UiLanguage, Record<string, string>>;
 
-const trainingStateCopy: Record<UiLanguage, { cloudSaved: string; localOnly: string }> = {
-  'zh-CN': { cloudSaved: '已保存到私有改进库', localOnly: '仅保存在本机' },
-  en: { cloudSaved: 'Saved to private improvement library', localOnly: 'Stored on this device only' },
-  'zh-HK': { cloudSaved: '已儲存至私人改善資料庫', localOnly: '只儲存在本機' },
-  ja: { cloudSaved: '非公開の改善ライブラリに保存済み', localOnly: 'この端末内にのみ保存' },
+const trainingStateCopy: Record<UiLanguage, { cloudSaved: string; localOnly: string; uploading: string; failed: string }> = {
+  'zh-CN': { cloudSaved: '已保存到私有改进库', localOnly: '仅保存在本机', uploading: '正在上传到私有改进库', failed: '云端上传失败；本机录音仍安全' },
+  en: { cloudSaved: 'Saved to private improvement library', localOnly: 'Stored on this device only', uploading: 'Uploading to private improvement library', failed: 'Cloud upload failed; local audio is safe' },
+  'zh-HK': { cloudSaved: '已儲存至私人改善資料庫', localOnly: '只儲存在本機', uploading: '正在上傳至私人改善資料庫', failed: '雲端上傳失敗；本機錄音仍安全' },
+  ja: { cloudSaved: '非公開の改善ライブラリに保存済み', localOnly: 'この端末内にのみ保存', uploading: '非公開の改善ライブラリへアップロード中', failed: 'クラウドへのアップロードに失敗。端末内の録音は保持されています' },
 };
 
 const privacyNoticeCopy: Record<UiLanguage, string> = {
@@ -60,13 +60,15 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
 
   useEffect(() => {
     let active = true;
-    listAudio().then(items => {
+    const reload = () => listAudio().then(items => {
       if (active) {
         setEntries(items.sort((a, b) => (b.metadata?.createdAt || '').localeCompare(a.metadata?.createdAt || '')));
         setLoading(false);
       }
     }).catch(() => { if (active) { setError(t.unavailable); setLoading(false); } });
-    return () => { active = false; };
+    void reload();
+    window.addEventListener('oral-training-upload-state', reload);
+    return () => { active = false; window.removeEventListener('oral-training-upload-state', reload); };
   }, [t.unavailable]);
 
   useEffect(() => () => { if (selectedUrl) URL.revokeObjectURL(selectedUrl); }, [selectedUrl]);
@@ -170,7 +172,7 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
         <strong>{question}</strong>
         <small>{entry.metadata?.transcript || linked?.turn.transcript || t.pending}</small>
         <span className="recording-size">{t.size}: {(entry.blob.size / 1024 / 1024).toFixed(2)} MB</span>
-        <span className="recording-size">{entry.metadata?.trainingUploadedAt ? '☁ ' + trainingStateCopy[uiLanguage].cloudSaved : trainingStateCopy[uiLanguage].localOnly}</span>
+        <span className="recording-size">{entry.metadata?.trainingUploadedAt ? '☁ ' + trainingStateCopy[uiLanguage].cloudSaved : entry.metadata?.trainingUploadStatus === 'pending' ? trainingStateCopy[uiLanguage].uploading : entry.metadata?.trainingUploadStatus === 'failed' ? trainingStateCopy[uiLanguage].failed : trainingStateCopy[uiLanguage].localOnly}</span>
         <div className="turn-actions">
           <button onClick={() => play(entry)}><Play size={15} /> {t.play}</button>
           <button onClick={() => download(entry)}><Download size={15} /> {t.download}</button>

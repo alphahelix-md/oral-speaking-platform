@@ -24,6 +24,31 @@ function formatUploadError(stage: string, error: unknown): Error {
   return new Error(`TRAINING_${stage}_${String(detail).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 80)}`);
 }
 
+function errorInfo(error: unknown) {
+  return error as { code?: string; status?: number; statusCode?: string | number; message?: string } | null;
+}
+
+function isDuplicate(error: unknown): boolean {
+  const value = errorInfo(error);
+  const detail = `${value?.code || ''} ${value?.status || ''} ${value?.statusCode || ''} ${value?.message || ''}`.toLowerCase();
+  return detail.includes('409') || detail.includes('23505') || detail.includes('duplicate') || detail.includes('already exists');
+}
+
+function isRetryable(error: unknown): boolean {
+  const value = errorInfo(error);
+  const status = Number(value?.status || value?.statusCode || 0);
+  return !status || status === 408 || status === 429 || status >= 500;
+}
+
+async function retry<T>(operation: () => PromiseLike<{ data: T; error: unknown }>): Promise<{ data: T; error: unknown }> {
+  let result = await operation();
+  if (result.error && isRetryable(result.error)) {
+    await new Promise(resolve => window.setTimeout(resolve, 500));
+    result = await operation();
+  }
+  return result;
+}
+
 export async function uploadTrainingAudio(input: TrainingUpload): Promise<string> {
   const client = getSupabaseBrowser();
   if (!client) throw new Error('TRAINING_UPLOAD_NOT_CONFIGURED');
@@ -33,13 +58,10 @@ export async function uploadTrainingAudio(input: TrainingUpload): Promise<string
 
   const contentType = input.audio.type.split(';', 1)[0] || 'audio/webm';
   const path = `${user.id}/${input.id}.${extension(contentType)}`;
-  const { error: uploadError } = await client.storage.from('training-audio').upload(path, input.audio, {
-    contentType,
-    upsert: false,
-  });
-  if (uploadError) throw formatUploadError('STORAGE', uploadError);
+  const upload = await retry(() => client.storage.from('training-audio').upload(path, input.audio, { contentType, upsert: false }));
+  if (upload.error && !isDuplicate(upload.error)) throw formatUploadError('STORAGE', upload.error);
 
-  const { error: metadataError } = await client.from('training_audio_contributions').insert({
+  const metadata = await retry(() => client.from('training_audio_contributions').insert({
     user_id: user.id,
     local_audio_id: input.id,
     object_path: path,
@@ -50,10 +72,10 @@ export async function uploadTrainingAudio(input: TrainingUpload): Promise<string
     transcript: input.transcript,
     duration_seconds: input.durationSeconds,
     consent_version: '2026-09-20-v1',
-  });
-  if (metadataError) {
+  }));
+  if (metadata.error && !isDuplicate(metadata.error)) {
     await client.storage.from('training-audio').remove([path]);
-    throw formatUploadError('METADATA', metadataError);
+    throw formatUploadError('METADATA', metadata.error);
   }
   return path;
 }
