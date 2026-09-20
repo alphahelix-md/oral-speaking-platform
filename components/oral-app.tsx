@@ -349,7 +349,10 @@ export function OralApp() {
         try {
           const path = await uploadTrainingAudio({ id: audioId, audio, language, mode, question: session.question, transcript: transcript.trim(), durationSeconds: seconds });
           await updateAudioMetadata(audioId, { trainingConsent: true, trainingStoragePath: path, trainingUploadedAt: new Date().toISOString() });
-        } catch { setNotice(consentCopy[uiLanguage].uploadFailed); }
+        } catch (error) {
+          const code = error instanceof Error ? error.message : 'TRAINING_UPLOAD_UNKNOWN';
+          setNotice(`${consentCopy[uiLanguage].uploadFailed} [${code}]`);
+        }
       }
       setSession(updated);
       setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setPendingAudioId(null); setAudioSaveFailed(false);

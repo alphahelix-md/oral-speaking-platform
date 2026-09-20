@@ -1,19 +1,9 @@
--- Repair for projects that already ran 20260920_training_audio_consent.sql.
--- JWT user metadata can be stale; use a current, owner-managed consent row.
+-- Repair consented uploads while preserving database-enforced opt-in.
+-- The function has no user argument and can only inspect the caller's consent.
 
-create table if not exists public.training_audio_consents (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-  allowed boolean not null default false,
-  updated_at timestamptz not null default now()
-);
-
-alter table public.training_audio_consents enable row level security;
-
-drop policy if exists "owners manage training consent" on public.training_audio_consents;
-create policy "owners manage training consent"
-  on public.training_audio_consents for all to authenticated
-  using ((select auth.uid()) = user_id)
-  with check ((select auth.uid()) = user_id);
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on table public.training_audio_consents to authenticated;
+grant select, insert, delete on table public.training_audio_contributions to authenticated;
 
 create or replace function public.current_user_has_training_audio_consent()
 returns boolean
@@ -28,18 +18,9 @@ as $$
     where user_id = (select auth.uid()) and allowed
   );
 $$;
+
 revoke all on function public.current_user_has_training_audio_consent() from public;
 grant execute on function public.current_user_has_training_audio_consent() to authenticated;
-
-insert into public.training_audio_consents (user_id, allowed, updated_at)
-select
-  id,
-  coalesce(raw_user_meta_data ->> 'oral_training_consent' = 'training', false),
-  now()
-from auth.users
-on conflict (user_id) do update
-  set allowed = excluded.allowed,
-      updated_at = excluded.updated_at;
 
 drop policy if exists "owners insert training contributions" on public.training_audio_contributions;
 create policy "owners insert training contributions"

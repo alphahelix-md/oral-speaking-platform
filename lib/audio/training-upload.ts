@@ -18,6 +18,12 @@ function extension(type: string) {
   return 'webm';
 }
 
+function formatUploadError(stage: string, error: unknown): Error {
+  const value = error as { code?: string; statusCode?: string | number; message?: string } | null;
+  const detail = value?.code || value?.statusCode || value?.message || 'UNKNOWN';
+  return new Error(`TRAINING_${stage}_${String(detail).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 80)}`);
+}
+
 export async function uploadTrainingAudio(input: TrainingUpload): Promise<string> {
   const client = getSupabaseBrowser();
   if (!client) throw new Error('TRAINING_UPLOAD_NOT_CONFIGURED');
@@ -31,7 +37,7 @@ export async function uploadTrainingAudio(input: TrainingUpload): Promise<string
     contentType,
     upsert: false,
   });
-  if (uploadError) throw uploadError;
+  if (uploadError) throw formatUploadError('STORAGE', uploadError);
 
   const { error: metadataError } = await client.from('training_audio_contributions').insert({
     user_id: user.id,
@@ -47,7 +53,7 @@ export async function uploadTrainingAudio(input: TrainingUpload): Promise<string
   });
   if (metadataError) {
     await client.storage.from('training-audio').remove([path]);
-    throw metadataError;
+    throw formatUploadError('METADATA', metadataError);
   }
   return path;
 }

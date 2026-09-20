@@ -34,6 +34,22 @@ create policy "owners manage training consent" on public.training_audio_consents
   using ((select auth.uid()) = user_id)
   with check ((select auth.uid()) = user_id);
 
+create or replace function public.current_user_has_training_audio_consent()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.training_audio_consents
+    where user_id = (select auth.uid()) and allowed
+  );
+$$;
+revoke all on function public.current_user_has_training_audio_consent() from public;
+grant execute on function public.current_user_has_training_audio_consent() to authenticated;
+
 create table if not exists public.training_audio_contributions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -56,10 +72,7 @@ drop policy if exists "owners insert training contributions" on public.training_
 create policy "owners insert training contributions" on public.training_audio_contributions for insert to authenticated
   with check (
     auth.uid() = user_id
-    and exists (
-      select 1 from public.training_audio_consents consent
-      where consent.user_id = (select auth.uid()) and consent.allowed
-    )
+    and public.current_user_has_training_audio_consent()
   );
 drop policy if exists "owners read training contributions" on public.training_audio_contributions;
 create policy "owners read training contributions" on public.training_audio_contributions for select to authenticated using (auth.uid() = user_id);
@@ -75,10 +88,7 @@ create policy "owners upload training audio" on storage.objects for insert to au
   with check (
     bucket_id = 'training-audio'
     and (storage.foldername(name))[1] = auth.uid()::text
-    and exists (
-      select 1 from public.training_audio_consents consent
-      where consent.user_id = (select auth.uid()) and consent.allowed
-    )
+    and public.current_user_has_training_audio_consent()
   );
 drop policy if exists "owners read training audio" on storage.objects;
 create policy "owners read training audio" on storage.objects for select to authenticated using (bucket_id = 'training-audio' and (storage.foldername(name))[1] = auth.uid()::text);
