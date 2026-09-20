@@ -15,7 +15,7 @@ const providerConfig: Record<TextProvider, { key?: string; model: string; url: s
 };
 export const aiAvailable = Object.values(providerConfig).some(provider => Boolean(provider.key));
 
-async function generate(provider: TextProvider, instructions: string, input: string): Promise<string> {
+async function generate(provider: TextProvider, instructions: string, input: string, timeoutMs = 20_000): Promise<string> {
   const config = providerConfig[provider];
   if (!config.key) throw new Error(`${provider.toUpperCase()}_NOT_CONFIGURED`);
   const requestBody = config.format === 'responses'
@@ -23,7 +23,7 @@ async function generate(provider: TextProvider, instructions: string, input: str
     : { model: config.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], temperature: 0.4 };
   const response = await fetch(config.url, {
     method: 'POST', headers: { Authorization: `Bearer ${config.key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody), cache: 'no-store'
+    body: JSON.stringify(requestBody), cache: 'no-store', signal: AbortSignal.timeout(timeoutMs)
   });
   if (!response.ok) throw new Error(`AI service error ${response.status}`);
   const responseBody = await response.json();
@@ -35,7 +35,7 @@ export async function nextQuestion(provider: TextProvider, language: LanguageId,
   const config = languages[language]; const training = modes[mode];
   const history = turns.map(t => `Examiner: ${t.question}\nLearner: ${t.transcript}`).join('\n');
   const stage = mode === 'ielts' ? `Stay in IELTS Speaking Part ${ieltsPartAt(topic, turns.length)}. The question set theme is ${ieltsQuestionSet(questionSetId).theme}. Ask a relevant follow-up for this part and theme only; do not move to another part.` : '';
-  const output = await generate(provider, `${config.conversationPrompt}\n${training.prompt}\n${stage}\nLevel: ${level}. Topic: ${topic}. Return ONLY the next question, under 35 words. Language: ${config.name}.`, `Conversation so far:\n${history}\nAsk one relevant follow-up.`);
+  const output = await generate(provider, `${config.conversationPrompt}\n${training.prompt}\n${stage}\nLevel: ${level}. Topic: ${topic}. Return ONLY the next question, under 35 words. Language: ${config.name}.`, `Conversation so far:\n${history}\nAsk one relevant follow-up.`, 8_000);
   return output.trim().replace(/^['"“”]|['"“”]$/g, '').slice(0, 500);
 }
 

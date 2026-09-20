@@ -29,6 +29,12 @@ type Theme = 'light' | 'dark';
 type TrainingConsent = 'unset' | 'local_only' | 'training';
 // Interface copy is selected independently of the language being practiced.
 type TextProvider = 'openai' | 'deepseek' | 'glm';
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try { return await fetch(input, { ...init, signal: controller.signal }); }
+  finally { window.clearTimeout(timeout); }
+}
 const interfaceLanguages: { id: UiLanguage; label: string }[] = [
   { id: 'zh-CN', label: '简体中文' }, { id: 'en', label: 'English' }, { id: 'zh-HK', label: '繁體中文（香港）' }, { id: 'ja', label: '日本語' },
 ];
@@ -346,13 +352,13 @@ export function OralApp() {
       const updated = speakingReducer(session, { type: 'ANSWER', transcript: transcript.trim(), audioId, durationSeconds: seconds, audioMetrics: audioMetrics || undefined, transcriptResult: transcriptResult || undefined, examPart: mode === 'ielts' ? retryExamPart || ieltsPartAt(topic, session.turns.length) : undefined });
       if (audioId) await updateAudioMetadata(audioId, { turnId: updated.turns[updated.turns.length - 1]?.id, transcript: transcript.trim() });
       if (audioId && audio && authUser && trainingConsent === 'training') {
-        try {
-          const path = await uploadTrainingAudio({ id: audioId, audio, language, mode, question: session.question, transcript: transcript.trim(), durationSeconds: seconds });
-          await updateAudioMetadata(audioId, { trainingConsent: true, trainingStoragePath: path, trainingUploadedAt: new Date().toISOString() });
-        } catch (error) {
+        const uploadInput = { id: audioId, audio, language, mode, question: session.question, transcript: transcript.trim(), durationSeconds: seconds };
+        void uploadTrainingAudio(uploadInput).then(path =>
+          updateAudioMetadata(audioId, { trainingConsent: true, trainingStoragePath: path, trainingUploadedAt: new Date().toISOString() })
+        ).catch(error => {
           const code = error instanceof Error ? error.message : 'TRAINING_UPLOAD_UNKNOWN';
           setNotice(`${consentCopy[uiLanguage].uploadFailed} [${code}]`);
-        }
+        });
       }
       setSession(updated);
       setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setPendingAudioId(null); setAudioSaveFailed(false);
@@ -368,11 +374,11 @@ export function OralApp() {
         return;
       }
       try {
-        const response = await fetch('/api/ai', {
+        const response = await fetchWithTimeout('/api/ai', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()) },
           body: JSON.stringify({ action: 'next', provider: textProvider, language, mode, level, topic, questionSetId: session.examSetId, turns: updated.turns }),
-        });
+        }, 10_000);
         const data = await response.json();
         if (response.ok && data.question) question = data.question;
         else if (data.error !== 'AI_NOT_CONFIGURED') setNotice(extra.unavailable);
@@ -386,7 +392,7 @@ export function OralApp() {
       setBusy(false); submitLock.current = false;
     }
   }
-  async function finishSession(current: Session | null = session) { if (!current || evaluationLock.current || busy && current === session) return; evaluationLock.current = true; setBusy(true); setProcessingStage(voice.evaluating); setNotice(''); let evaluation = demoEvaluation(current.language, current.turns, uiLanguage); try { if (current.turns.length) { try { const response = await fetch('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()) }, body: JSON.stringify({ action: 'evaluate', provider: textProvider, uiLanguage, language: current.language, mode: current.mode, level: current.level, topic: current.topic, turns: current.turns }) }); const data = await response.json(); if (response.ok && data.evaluation) evaluation = data.evaluation; else if (data.error !== 'AI_NOT_CONFIGURED') setNotice(extra.demoFeedback); } catch { setNotice(extra.demoOffline); } } const done = speakingReducer(current, { type: 'EVALUATE', evaluation }); setSession(done); saveSession(done); navigate('result'); } finally { setBusy(false); setProcessingStage(''); evaluationLock.current = false; } }
+  async function finishSession(current: Session | null = session) { if (!current || evaluationLock.current || busy && current === session) return; evaluationLock.current = true; setBusy(true); setProcessingStage(voice.evaluating); setNotice(''); let evaluation = demoEvaluation(current.language, current.turns, uiLanguage); try { if (current.turns.length) { try { const response = await fetchWithTimeout('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()) }, body: JSON.stringify({ action: 'evaluate', provider: textProvider, uiLanguage, language: current.language, mode: current.mode, level: current.level, topic: current.topic, turns: current.turns }) }, 25_000); const data = await response.json(); if (response.ok && data.evaluation) evaluation = data.evaluation; else if (data.error !== 'AI_NOT_CONFIGURED') setNotice(extra.demoFeedback); } catch { setNotice(extra.demoOffline); } } const done = speakingReducer(current, { type: 'EVALUATE', evaluation }); setSession(done); saveSession(done); navigate('result'); } finally { setBusy(false); setProcessingStage(''); evaluationLock.current = false; } }
   function retry(turn: Turn) { if (!session) return; setSession(s => s && speakingReducer(s, { type: 'RETRY', turnId: turn.id })); setTranscript(''); setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setPendingAudioId(null); setAudioSaveFailed(false); setSeconds(0); setNotice(extra.sameQuestion); setRetryExamPart(mode === 'ielts' ? turn.examPart || ieltsPartAt(topic, Math.max(0, session.turns.findIndex(item => item.id === turn.id))) : undefined); navigate('speaking'); }
   async function playAudio(id: string) { const blob = await getAudio(id); if (!blob) { setNotice(extra.audioMissing); return; } const url = URL.createObjectURL(blob); const player = new Audio(url); player.onended = () => URL.revokeObjectURL(url); player.play().catch(() => setNotice(extra.playback)); }
   function openSession(item: Session) { setSession(item); setLanguage(item.language); setMode(item.mode); setLevel(item.level); setTopic(item.topic); setRetryExamPart(undefined); navigate(item.evaluation ? 'result' : 'speaking'); }
