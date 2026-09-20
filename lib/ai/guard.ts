@@ -22,8 +22,8 @@ async function redis(command: string[]) {
 }
 
 export async function guardBetaAccess(request: Request) {
-  await guardAccountRequest(request);
-  if (process.env.NODE_ENV !== 'production') return;
+  const account = await guardAccountRequest(request);
+  if (process.env.NODE_ENV !== 'production') return account?.id;
   const codes = setting('BETA_ACCESS_CODES')?.split(',').map(code => code.trim()).filter(Boolean) || [];
   const code = request.headers.get('x-beta-access-code')?.trim() || '';
   if (!codes.length) {
@@ -31,10 +31,11 @@ export async function guardBetaAccess(request: Request) {
     throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
   }
   if (!codes.includes(code)) throw new GuardError('BETA_ACCESS_DENIED');
+  return account?.id;
 }
 
 export async function guardBetaRequest(request: Request) {
-  await guardBetaAccess(request);
+  const accountId = await guardBetaAccess(request);
   if (process.env.NODE_ENV !== 'production') return;
   const limit = Number(setting('BETA_DAILY_REQUEST_LIMIT'));
   if (!Number.isInteger(limit) || limit < 1) {
@@ -45,12 +46,12 @@ export async function guardBetaRequest(request: Request) {
   const code = request.headers.get('x-beta-access-code')?.trim() || '';
   const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
   const day = new Date().toISOString().slice(0, 10);
-  const fingerprint = createHash('sha256').update(`${code}:${ip}`).digest('hex').slice(0, 24);
-  const key = `oral:beta:v2:${day}:${fingerprint}`;
+  const fingerprint = createHash('sha256').update(`${code}:${accountId || ip}`).digest('hex').slice(0, 24);
+  const key = `oral:beta:v3:${day}:${fingerprint}`;
   const speechRequestId = request.headers.get('x-speech-request-id')?.trim() || '';
   const isChunkedSpeech = /^sp_[a-zA-Z0-9_-]{6,64}$/.test(speechRequestId);
   const recordingKey = isChunkedSpeech
-    ? `oral:beta:v2:recording:${day}:${fingerprint}:${createHash('sha256').update(speechRequestId).digest('hex').slice(0, 24)}`
+    ? `oral:beta:v3:recording:${day}:${fingerprint}:${createHash('sha256').update(speechRequestId).digest('hex').slice(0, 24)}`
     : '';
   if (recordingKey && (await redis(['get', recordingKey])).result) return;
   const current = Number((await redis(['get', key])).result || 0);

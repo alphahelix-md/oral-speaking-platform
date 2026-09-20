@@ -5,6 +5,7 @@ import { Download, Play, RotateCcw, Trash2, UploadCloud } from 'lucide-react';
 import { deleteAudio, listAudio, updateAudioMetadata, type AudioLibraryEntry, type AudioMetadata } from '@/core/audio/store';
 import { recordedAudioToWavChunks } from '@/core/audio/wav';
 import { speechErrors } from '@/lib/speech/ui-copy';
+import { getSupabaseAuthHeaders } from '@/lib/auth/supabase-browser';
 import type { Session } from '@/types/speaking';
 
 type UiLanguage = 'zh-CN' | 'en' | 'zh-HK' | 'ja';
@@ -122,7 +123,7 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
         form.append('language', language);
         const response = await fetch('/api/transcribe', {
           method: 'POST',
-          headers: { 'x-beta-access-code': accessCode, 'x-speech-request-id': requestId, 'x-speech-chunk-index': String(index) },
+          headers: { 'x-beta-access-code': accessCode, ...(await getSupabaseAuthHeaders()), 'x-speech-request-id': requestId, 'x-speech-chunk-index': String(index) },
           body: form,
         });
         const data = await response.json();

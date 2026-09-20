@@ -16,7 +16,7 @@ function configuration() {
 // every protected API request must carry a valid invited user's access token.
 export async function guardAccountRequest(request: Request) {
   const config = configuration();
-  if (!config) return;
+  if (!config) return null;
   const value = request.headers.get('authorization') || '';
   const token = value.startsWith('Bearer ') ? value.slice('Bearer '.length) : '';
   if (!token) throw new AccountGuardError('AUTH_REQUIRED');
@@ -32,4 +32,5 @@ export async function guardAccountRequest(request: Request) {
   if (typeof savedCode !== 'string' || !code || savedCode !== code) {
     throw new AccountGuardError('AUTH_ACCESS_CODE_MISMATCH');
   }
+  return data.user;
 }
