@@ -15,6 +15,7 @@ import { LearningProgressDashboard } from '@/components/learning-progress-dashbo
 import { LearningRecordManager } from '@/components/learning-record-manager';
 import { speechUi, speechErrors } from '@/lib/speech/ui-copy';
 import { SpeechResult } from '@/components/speech-result';
+import { TurnQuickFeedback } from '@/components/turn-quick-feedback';
 import { SpeechDebugPanel, type SpeechDiagnostic } from '@/components/speech-debug-panel';
 import type { AudioMetrics, TranscriptResult } from '@/lib/speech/types';
 import { demoEvaluation, demoQuestion } from '@/lib/ai/demo';
@@ -118,6 +119,7 @@ export function OralApp() {
   const [authOpen, setAuthOpen] = useState(false); const [authUser, setAuthUser] = useState<User | null>(null); const [authEmail, setAuthEmail] = useState(''); const [authBusy, setAuthBusy] = useState(false); const [authNotice, setAuthNotice] = useState('');
   const [trainingConsent, setTrainingConsent] = useState<TrainingConsent>('unset'); const [consentOpen, setConsentOpen] = useState(false); const [consentBusy, setConsentBusy] = useState(false);
   const [questionAudioState, setQuestionAudioState] = useState<'idle' | 'loading' | 'ready' | 'fallback'>('idle');
+  const [quickFeedbackTurnId, setQuickFeedbackTurnId] = useState<string | null>(null);
   const recorder = useRef<AudioRecorder | null>(null); const browserTranscriber = useRef<BrowserTranscriber | null>(null); const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingLock = useRef(false); const stopLock = useRef(false); const analysisLock = useRef(false); const submitLock = useRef(false); const evaluationLock = useRef(false);
   const transcriptionProgress = useRef<{ blob: Blob; parts: string[] } | null>(null);
@@ -174,7 +176,7 @@ export function OralApp() {
     })();
     return () => { cancelled = true; };
   }, [session?.question, session?.language, session?.mode, session?.level, accessCode]);
-  const config = languages[language]; const activeMode = modes[mode]; const sessionTurnLimit = mode === 'ielts' ? ieltsPlan(topic).length : activeMode.maxTurns; const stats = getStats(sessions); const currentStats = getStats(sessions, tab === 'all' ? undefined : tab); const text = uiCopy[uiLanguage]; const extra = uiExtra[uiLanguage]; const voice = speechUi[uiLanguage]; const modeText = (id: ModeId) => modeUi[uiLanguage][id] || modes[id]; const studyName = (id: LanguageId) => id === 'en' ? extra.english : extra.japanese; const dateLocale = uiLanguage === 'zh-HK' ? 'zh-HK' : uiLanguage; const shownEvaluation = session?.evaluation?.model === 'demo' ? demoEvaluation(session.language, session.turns, uiLanguage) : session?.evaluation; const topicLabel = (value: string) => topicUi[uiLanguage][value] || value; const ieltsStageLabel = (part: 1 | 2 | 3) => topicLabel(part === 1 ? IELTS_PART_1 : part === 2 ? IELTS_PART_2 : IELTS_PART_3);
+  const config = languages[language]; const activeMode = modes[mode]; const sessionTurnLimit = mode === 'ielts' ? ieltsPlan(topic).length : activeMode.maxTurns; const stats = getStats(sessions); const currentStats = getStats(sessions, tab === 'all' ? undefined : tab); const text = uiCopy[uiLanguage]; const extra = uiExtra[uiLanguage]; const voice = speechUi[uiLanguage]; const modeText = (id: ModeId) => modeUi[uiLanguage][id] || modes[id]; const studyName = (id: LanguageId) => id === 'en' ? extra.english : extra.japanese; const dateLocale = uiLanguage === 'zh-HK' ? 'zh-HK' : uiLanguage; const shownEvaluation = session?.evaluation?.model === 'demo' ? demoEvaluation(session.language, session.turns, uiLanguage) : session?.evaluation; const quickFeedbackTurn = session?.turns.find(turn => turn.id === quickFeedbackTurnId); const topicLabel = (value: string) => topicUi[uiLanguage][value] || value; const ieltsStageLabel = (part: 1 | 2 | 3) => topicLabel(part === 1 ? IELTS_PART_1 : part === 2 ? IELTS_PART_2 : IELTS_PART_3);
   useEffect(() => {
     window.history.replaceState({ ...window.history.state, oralPage: 'home', oralSettings: false }, '');
     const onPopState = (event: PopStateEvent) => {
@@ -186,14 +188,15 @@ export function OralApp() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
   useEffect(() => {
-    if (page !== 'speaking' || !session || questionAudioState !== 'ready') return;
+    if (page !== 'speaking') { automaticallyReadQuestion.current = ''; return; }
+    if (!session) return;
     const input: QuestionAudioInput = { text: session.question, language: session.language, mode: session.mode, level: session.level };
-    const key = questionAudioKey(input);
+    const key = session.id + ':' + questionAudioKey(input);
     if (automaticallyReadQuestion.current === key) return;
     automaticallyReadQuestion.current = key;
-    const timerId = window.setTimeout(() => { void speakQuestion(session, true); }, 80);
+    const timerId = window.setTimeout(() => { void speakQuestion(session, true); }, 160);
     return () => window.clearTimeout(timerId);
-  }, [page, session?.question, session?.language, session?.mode, session?.level, questionAudioState]);
+  }, [page, session?.id, session?.question, session?.language, session?.mode, session?.level]);
   function navigate(next: Page) {
     if (next === page) return;
     window.history.pushState({ oralPage: next, oralSettings: false }, '');
@@ -285,6 +288,7 @@ export function OralApp() {
     setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setPendingAudioId(null); setAudioSaveFailed(false);
     setSeconds(0);
     setNotice('');
+    setQuickFeedbackTurnId(null);
     setRetryExamPart(undefined);
     navigate('speaking');
   }
@@ -474,6 +478,7 @@ export function OralApp() {
       const audioId = audio ? pendingAudioId || crypto.randomUUID() : undefined;
       if (audioId && audio && !pendingAudioId) await saveAudio(audioId, audio, { createdAt: new Date().toISOString(), language, mode, question: session.question, durationSeconds: seconds, sessionId: session.id });
       const updated = speakingReducer(session, { type: 'ANSWER', transcript: transcript.trim(), audioId, durationSeconds: seconds, audioMetrics: audioMetrics || undefined, transcriptResult: transcriptResult || undefined, examPart: mode === 'ielts' ? retryExamPart || ieltsPartAt(topic, session.turns.length) : undefined });
+      setQuickFeedbackTurnId(updated.turns.at(-1)?.id || null);
       if (audioId) await updateAudioMetadata(audioId, { turnId: updated.turns[updated.turns.length - 1]?.id, transcript: transcript.trim() });
       if (audioId && audio && authUser && trainingConsent === 'training') {
         const uploadInput = { id: audioId, audio, language, mode, question: session.question, transcript: transcript.trim(), durationSeconds: seconds };
@@ -522,7 +527,7 @@ export function OralApp() {
     }
   }
   async function finishSession(current: Session | null = session) { if (!current || evaluationLock.current || busy && current === session) return; evaluationLock.current = true; setBusy(true); setProcessingStage(voice.evaluating); setNotice(''); let evaluation = demoEvaluation(current.language, current.turns, uiLanguage); try { if (current.turns.length) { try { const response = await fetchWithTimeout('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()) }, body: JSON.stringify({ action: 'evaluate', provider: textProvider, uiLanguage, language: current.language, mode: current.mode, level: current.level, topic: current.topic, turns: current.turns }) }, 25_000); const data = await response.json(); if (response.ok && data.evaluation) evaluation = data.evaluation; else if (data.error !== 'AI_NOT_CONFIGURED') setNotice(extra.demoFeedback); } catch { setNotice(extra.demoOffline); } } const done = speakingReducer(current, { type: 'EVALUATE', evaluation }); setSession(done); saveSession(done); navigate('result'); } finally { setBusy(false); setProcessingStage(''); evaluationLock.current = false; } }
-  function retry(turn: Turn) { if (!session) return; setSession(s => s && speakingReducer(s, { type: 'RETRY', turnId: turn.id })); setTranscript(''); setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setPendingAudioId(null); setAudioSaveFailed(false); setSeconds(0); setNotice(extra.sameQuestion); setRetryExamPart(mode === 'ielts' ? turn.examPart || ieltsPartAt(topic, Math.max(0, session.turns.findIndex(item => item.id === turn.id))) : undefined); navigate('speaking'); }
+  function retry(turn: Turn) { if (!session) return; setSession(s => s && speakingReducer(s, { type: 'RETRY', turnId: turn.id })); setTranscript(''); setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setPendingAudioId(null); setAudioSaveFailed(false); setQuickFeedbackTurnId(null); setSeconds(0); setNotice(extra.sameQuestion); setRetryExamPart(mode === 'ielts' ? turn.examPart || ieltsPartAt(topic, Math.max(0, session.turns.findIndex(item => item.id === turn.id))) : undefined); navigate('speaking'); }
   async function playAudio(id: string) { const blob = await getAudio(id); if (!blob) { setNotice(extra.audioMissing); return; } const url = URL.createObjectURL(blob); const player = new Audio(url); player.onended = () => URL.revokeObjectURL(url); player.play().catch(() => setNotice(extra.playback)); }
   function openSession(item: Session) { setSession(item); setLanguage(item.language); setMode(item.mode); setLevel(item.level); setTopic(item.topic); setRetryExamPart(undefined); navigate(item.evaluation ? 'result' : 'speaking'); }
   function recordingDeleted(id: string) {
@@ -576,6 +581,7 @@ export function OralApp() {
       {page === 'recordings' && <RecordingLibrary sessions={sessions} uiLanguage={uiLanguage} accessCode={accessCode} onEditAccessCode={openSettings} onDeleted={recordingDeleted} />}
       {page === 'records' && <LearningRecordManager sessions={sessions} uiLanguage={uiLanguage} onOpen={openSession} onDelete={learningRecordsDeleted} />}
       {page === 'setup' && <p className="center-note recording-disclosure">{localRecordingDisclosure[uiLanguage]}</p>}
+      {page === 'speaking' && session && quickFeedbackTurn && <TurnQuickFeedback turn={quickFeedbackTurn} language={session.language} uiLanguage={uiLanguage} />}
     </main>
     {page !== 'speaking' && page !== 'result' && <nav className="bottom-nav" aria-label={extra.navigation}>{([{ id: 'home', label: text.home, Icon: Home }, { id: 'practice', label: text.practice, Icon: Headphones }, { id: 'progress', label: text.progress, Icon: BarChart3 }, { id: 'profile', label: text.profile, Icon: UserRound }] as const).map(item => <button key={item.id} onClick={() => navigate(item.id)} className={page === item.id || page === 'setup' && item.id === 'practice' ? 'active' : ''}><item.Icon size={21} strokeWidth={1.8} /><span>{item.label}</span></button>)}</nav>}
   </div></div>;
