@@ -49,6 +49,12 @@ const uiCopy: Record<UiLanguage, Record<string, string>> = {
   'zh-HK': { studio: '口語工作室', settings: '介面設定', interfaceLanguage: '介面語言', appearance: '顯示模式', light: '淺色模式', dark: '深色模式', close: '關閉', confirm: '確定', daily: '你的每日口語空間', voice: '找到你的聲音。', further: '繼續前行。', intro: '真實對話。貼心回饋。看得見的進步。', begin: '開始練習', choose: '選擇學習語言', journey: '你的歷程', sessions: '次練習', minutes: '分鐘口語', streak: '連續練習*', home: '首頁', practice: '練習', progress: '進度', profile: '我的', recordings: '我的錄音', audioSaveFailed: '錄音未能儲存到本機；請勿重新整理，先下載或重試。', settingsHint: '設定介面語言和顯示模式。' },
   ja: { studio: 'スピーキングスタジオ', settings: '表示設定', interfaceLanguage: '表示言語', appearance: '表示モード', light: 'ライトモード', dark: 'ダークモード', close: '閉じる', confirm: '確定', daily: '毎日のスピーキング空間', voice: '声を見つけよう。', further: 'もっと先へ。', intro: 'リアルな会話。丁寧なフィードバック。実感できる進歩。', begin: '始めましょう', choose: '学習言語を選ぶ', journey: 'あなたの記録', sessions: 'セッション', minutes: '話した分数', streak: '連続記録*', home: 'ホーム', practice: '練習', progress: '進捗', profile: 'プロフィール', recordings: '録音ライブラリ', audioSaveFailed: '音声を端末に保存できませんでした。更新せずにダウンロードするか、再試行してください。', settingsHint: '表示言語とテーマを設定。' },
 };
+const profileControls: Record<UiLanguage, Record<string, string>> = {
+  'zh-CN': { account: '账户登录', accountSignedIn: '账户已登录', accountHint: '登录、退出与访问码同步', settings: '界面设置', settingsHint: '语言、深色模式、模型与访问码', listening: '纯听训练', listeningHint: '模糊显示题目，只通过听力作答', on: '已开启', off: '已关闭' },
+  en: { account: 'Account sign-in', accountSignedIn: 'Signed in', accountHint: 'Sign in, sign out, and sync access code', settings: 'Interface settings', settingsHint: 'Language, theme, model, and access code', listening: 'Listening-only practice', listeningHint: 'Blur question text. Answer from listening.', on: 'On', off: 'Off' },
+  'zh-HK': { account: '帳戶登入', accountSignedIn: '帳戶已登入', accountHint: '登入、登出與存取碼同步', settings: '介面設定', settingsHint: '語言、深色模式、模型與存取碼', listening: '純聽訓練', listeningHint: '模糊顯示題目，只透過聽力作答', on: '已開啟', off: '已關閉' },
+  ja: { account: 'アカウントログイン', accountSignedIn: 'ログイン済み', accountHint: 'ログイン・ログアウト・アクセスコード同期', settings: '表示設定', settingsHint: '言語・テーマ・モデル・アクセスコード', listening: '聞き取り練習', listeningHint: '質問文をぼかし、聞いて回答します', on: 'オン', off: 'オフ' },
+};
 const iconMap = { ielts: BookOpen, daily: AudioLines, scenario: Target, topic: Sparkles, 'free-talk': Mic, toefl: BookOpen, interview: UserRound, weakness: Target };
 const formatTime = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
 const downloadAudioLabel: Record<UiLanguage, string> = { 'zh-CN': '下载这段录音', en: 'Download this recording', 'zh-HK': '下載這段錄音', ja: 'この録音をダウンロード' };
@@ -108,7 +114,7 @@ export function OralApp() {
   const [session, setSession] = useState<Session | null>(null); const [sessions, setSessions] = useState<Session[]>([]); const [retryExamPart, setRetryExamPart] = useState<1 | 2 | 3 | undefined>(); const [recording, setRecording] = useState(false); const [paused, setPaused] = useState(false); const [seconds, setSeconds] = useState(0);
   const [audio, setAudio] = useState<Blob | null>(null); const [audioUrl, setAudioUrl] = useState(''); const [transcript, setTranscript] = useState(''); const [notice, setNotice] = useState(''); const [busy, setBusy] = useState(false); const [tab, setTab] = useState<'all' | LanguageId>('all');
   const [pendingAudioId, setPendingAudioId] = useState<string | null>(null); const [audioSaveFailed, setAudioSaveFailed] = useState(false);
-  const [uiLanguage, setUiLanguage] = useState<UiLanguage>('en'); const [theme, setTheme] = useState<Theme>('light'); const [settingsOpen, setSettingsOpen] = useState(false); const [draftUiLanguage, setDraftUiLanguage] = useState<UiLanguage>('en'); const [draftTheme, setDraftTheme] = useState<Theme>('light'); const [textProvider, setTextProvider] = useState<TextProvider>('deepseek'); const [accessCode, setAccessCode] = useState(''); const [draftTextProvider, setDraftTextProvider] = useState<TextProvider>('deepseek'); const [draftAccessCode, setDraftAccessCode] = useState('');
+  const [uiLanguage, setUiLanguage] = useState<UiLanguage>('en'); const [theme, setTheme] = useState<Theme>('light'); const [settingsOpen, setSettingsOpen] = useState(false); const [draftUiLanguage, setDraftUiLanguage] = useState<UiLanguage>('en'); const [draftTheme, setDraftTheme] = useState<Theme>('light'); const [textProvider, setTextProvider] = useState<TextProvider>('deepseek'); const [accessCode, setAccessCode] = useState(''); const [draftTextProvider, setDraftTextProvider] = useState<TextProvider>('deepseek'); const [draftAccessCode, setDraftAccessCode] = useState(''); const [questionBlurred, setQuestionBlurred] = useState(false);
   const [authOpen, setAuthOpen] = useState(false); const [authUser, setAuthUser] = useState<User | null>(null); const [authEmail, setAuthEmail] = useState(''); const [authBusy, setAuthBusy] = useState(false); const [authNotice, setAuthNotice] = useState('');
   const [trainingConsent, setTrainingConsent] = useState<TrainingConsent>('unset'); const [consentOpen, setConsentOpen] = useState(false); const [consentBusy, setConsentBusy] = useState(false);
   const [questionAudioState, setQuestionAudioState] = useState<'idle' | 'loading' | 'ready' | 'fallback'>('idle');
@@ -117,12 +123,13 @@ export function OralApp() {
   const transcriptionProgress = useRef<{ blob: Blob; parts: string[] } | null>(null);
   const [audioMetrics, setAudioMetrics] = useState<AudioMetrics | null>(null); const [transcriptResult, setTranscriptResult] = useState<TranscriptResult | null>(null); const [processingStage, setProcessingStage] = useState('');
   const [speechDiagnostic, setSpeechDiagnostic] = useState<SpeechDiagnostic>({}); const speechRequestId = useRef(''); const speechRequestCount = useRef(0);
-  const questionAudioRequest = useRef<{ key: string; promise: Promise<Blob> } | null>(null); const playingQuestionAudio = useRef<HTMLAudioElement | null>(null); const playingQuestionAudioUrl = useRef('');
+  const questionAudioRequest = useRef<{ key: string; promise: Promise<Blob> } | null>(null); const playingQuestionAudio = useRef<HTMLAudioElement | null>(null); const playingQuestionAudioUrl = useRef(''); const automaticallyReadQuestion = useRef('');
   useEffect(() => { setSessions(getSessions()); }, []);
-  useEffect(() => { const savedLanguage = localStorage.getItem('oral-ui-language') as UiLanguage | null; const savedTheme = localStorage.getItem('oral-theme') as Theme | null; if (savedLanguage && uiCopy[savedLanguage]) setUiLanguage(savedLanguage); if (savedTheme === 'light' || savedTheme === 'dark') setTheme(savedTheme); }, []);
+  useEffect(() => { const savedLanguage = localStorage.getItem('oral-ui-language') as UiLanguage | null; const savedTheme = localStorage.getItem('oral-theme') as Theme | null; if (savedLanguage && uiCopy[savedLanguage]) setUiLanguage(savedLanguage); if (savedTheme === 'light' || savedTheme === 'dark') setTheme(savedTheme); setQuestionBlurred(localStorage.getItem('oral-question-blurred') === 'true'); }, []);
   useEffect(() => { setAccessCode(sessionStorage.getItem('oral-beta-access-code') || ''); }, []);
   useEffect(() => { const saved = localStorage.getItem('oral-text-provider'); if (saved === 'deepseek' || saved === 'glm') setTextProvider(saved); }, []);
   useEffect(() => { localStorage.setItem('oral-text-provider', textProvider); }, [textProvider]);
+  useEffect(() => { localStorage.setItem('oral-question-blurred', String(questionBlurred)); }, [questionBlurred]);
   useEffect(() => { document.documentElement.lang = uiLanguage; document.title = `Oral — ${uiCopy[uiLanguage].studio}`; document.documentElement.dataset.theme = theme; localStorage.setItem('oral-ui-language', uiLanguage); localStorage.setItem('oral-theme', theme); }, [uiLanguage, theme]);
   useEffect(() => { if (accessCode) sessionStorage.setItem('oral-beta-access-code', accessCode); else sessionStorage.removeItem('oral-beta-access-code'); }, [accessCode]);
   useEffect(() => {
@@ -178,6 +185,15 @@ export function OralApp() {
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
+  useEffect(() => {
+    if (page !== 'speaking' || !session || questionAudioState !== 'ready') return;
+    const input: QuestionAudioInput = { text: session.question, language: session.language, mode: session.mode, level: session.level };
+    const key = questionAudioKey(input);
+    if (automaticallyReadQuestion.current === key) return;
+    automaticallyReadQuestion.current = key;
+    const timerId = window.setTimeout(() => { void speakQuestion(session, true); }, 80);
+    return () => window.clearTimeout(timerId);
+  }, [page, session?.question, session?.language, session?.mode, session?.level, questionAudioState]);
   function navigate(next: Page) {
     if (next === page) return;
     window.history.pushState({ oralPage: next, oralSettings: false }, '');
@@ -272,15 +288,15 @@ export function OralApp() {
     setRetryExamPart(undefined);
     navigate('speaking');
   }
-  function speakQuestionLocally() {
-    if (!('speechSynthesis' in window) || !session) { setNotice(questionVoiceUnavailable[uiLanguage]); return; }
-    const preferredLocale = session.language === 'en' && session.mode === 'ielts' ? 'en-GB' : languages[session.language].speechLocale;
-    const selectedVoice = selectLearningVoice(speechSynthesis.getVoices(), session.language, preferredLocale);
+  function speakQuestionLocally(current = session) {
+    if (!('speechSynthesis' in window) || !current) { setNotice(questionVoiceUnavailable[uiLanguage]); return; }
+    const preferredLocale = current.language === 'en' && current.mode === 'ielts' ? 'en-GB' : languages[current.language].speechLocale;
+    const selectedVoice = selectLearningVoice(speechSynthesis.getVoices(), current.language, preferredLocale);
     speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(session.question);
+    const utterance = new SpeechSynthesisUtterance(current.question);
     if (selectedVoice) utterance.voice = selectedVoice;
     utterance.lang = selectedVoice?.lang || preferredLocale;
-    utterance.rate = session.language === 'ja' ? (session.level === 'Beginner' ? 0.82 : 0.9) : 0.9;
+    utterance.rate = current.language === 'ja' ? (current.level === 'Beginner' ? 0.82 : 0.9) : 0.9;
     utterance.pitch = 1.02;
     utterance.volume = 1;
     utterance.onerror = () => setNotice(questionVoiceUnavailable[uiLanguage]);
@@ -288,9 +304,10 @@ export function OralApp() {
     speechSynthesis.resume();
     speechSynthesis.speak(utterance);
   }
-  async function speakQuestion() {
-    if (!session) return;
-    const input: QuestionAudioInput = { text: session.question, language: session.language, mode: session.mode, level: session.level };
+  async function speakQuestion(current: Session | React.MouseEvent<HTMLButtonElement> | null = session, automatic = false) {
+    const activeSession = current && 'question' in current ? current : session;
+    if (!activeSession) return;
+    const input: QuestionAudioInput = { text: activeSession.question, language: activeSession.language, mode: activeSession.mode, level: activeSession.level };
     const key = questionAudioKey(input);
     try {
       let pending = questionAudioRequest.current?.key === key ? questionAudioRequest.current.promise : undefined;
@@ -316,8 +333,8 @@ export function OralApp() {
       try { await player.play(); } catch (error) { cleanup(); throw error; }
     } catch {
       setQuestionAudioState('fallback');
-      setNotice(questionVoiceFallback[uiLanguage]);
-      speakQuestionLocally();
+      setNotice(automatic ? questionVoiceUnavailable[uiLanguage] : questionVoiceFallback[uiLanguage]);
+      speakQuestionLocally(activeSession);
     }
   }
   async function beginRecording() {
@@ -327,6 +344,8 @@ export function OralApp() {
   async function startRecordingNow() {
     if (recordingLock.current || analysisLock.current) return;
     recordingLock.current = true;
+    playingQuestionAudio.current?.pause();
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
     speechRequestId.current = '';
     speechRequestCount.current = 0;
     setSpeechDiagnostic({
@@ -526,8 +545,8 @@ export function OralApp() {
     setSession(current => current && selected.has(current.id) ? null : current);
   }
 
-  return <div className="app-shell"><div className="app-frame">
-    {page !== 'speaking' && page !== 'result' && <header className="topbar"><div className="brand"><span className="brand-mark"><AudioLines size={20} strokeWidth={2.5} /></span><span>oral<span className="brand-dot">.</span></span></div><div className="topbar-tools"><span className="topbar-caption">{text.studio}</span><button className="auth-button" aria-label={authUser ? authCopy[uiLanguage].signOut : authCopy[uiLanguage].signIn} onClick={() => setAuthOpen(true)}>{authUser ? (authUser.email?.slice(0, 1).toUpperCase() || <UserRound size={17} />) : <LogIn size={17} />}</button><button className="settings-button" aria-label={text.settings} onClick={openSettings}><Settings2 size={18} /></button></div></header>}
+  return <div className={'app-shell ' + (questionBlurred ? 'questions-blurred' : '')}><div className="app-frame">
+    {page !== 'speaking' && page !== 'result' && <header className="topbar"><div className="brand"><span className="brand-mark"><AudioLines size={20} strokeWidth={2.5} /></span><span>oral<span className="brand-dot">.</span></span></div><div className="topbar-tools"><span className="topbar-caption">{text.studio}</span></div></header>}
     {authOpen && <div className="settings-backdrop" role="presentation" onClick={() => setAuthOpen(false)}><section className="auth-sheet" role="dialog" aria-modal="true" aria-label={authCopy[uiLanguage].signIn} onClick={event => event.stopPropagation()}><button className="settings-close auth-close" aria-label={text.close} onClick={() => setAuthOpen(false)}><X size={19} /></button>{authUser ? <><span className="section-kicker">ORAL ACCOUNT</span><h2>{authUser.email}</h2><p>{authCopy[uiLanguage].inviteOnly}</p><button className="primary-button" onClick={signOut}>{authCopy[uiLanguage].signOut} <LogOut size={19} /></button></> : <><span className="section-kicker">ORAL ACCOUNT</span><h2>{authCopy[uiLanguage].signIn}</h2><p>{authCopy[uiLanguage].inviteOnly}</p><label className="access-code-label" htmlFor="auth-email">{authCopy[uiLanguage].email}</label><input id="auth-email" className="access-code-input" type="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" /><button className="primary-button" disabled={authBusy || !authEmail.trim()} onClick={sendSignInLink}>{authBusy ? extra.processing : authCopy[uiLanguage].sendLink} <Mail size={19} /></button>{authNotice && <p className="auth-notice">{authNotice}</p>}</>}</section></div>}
     {consentOpen && <div className="settings-backdrop" role="presentation"><section className="auth-sheet consent-sheet" role="dialog" aria-modal="true" aria-label={consentCopy[uiLanguage].title}><button className="settings-close auth-close" aria-label={text.close} onClick={() => setConsentOpen(false)}><X size={19} /></button><span className="section-kicker">PRIVACY</span><h2>{consentCopy[uiLanguage].title}</h2><p>{consentCopy[uiLanguage].body}</p><div className="consent-options"><button disabled={consentBusy} onClick={() => saveTrainingConsent('local_only', page === 'speaking')}><strong>{consentCopy[uiLanguage].local}</strong><small>{consentCopy[uiLanguage].localHint}</small></button><button disabled={consentBusy} onClick={() => saveTrainingConsent('training', page === 'speaking')}><strong>{consentCopy[uiLanguage].training}</strong><small>{consentCopy[uiLanguage].trainingHint}</small></button></div></section></div>}
     {settingsOpen && <div className="settings-backdrop" role="presentation" onClick={closeSettings}>
@@ -553,6 +572,7 @@ export function OralApp() {
       {page === 'progress' && <><div className="page-intro progress-intro"><span className="section-kicker">{extra.bigPicture}</span><h1>{extra.seeProgress}<br /><em>{extra.progressEm}</em></h1><p>{extra.confidence}</p></div><div className="language-switch three"><button className={tab === 'all' ? 'selected' : ''} onClick={() => setTab('all')}>{extra.overall}</button><button className={tab === 'en' ? 'selected' : ''} onClick={() => setTab('en')}>{extra.english}</button><button className={tab === 'ja' ? 'selected' : ''} onClick={() => setTab('ja')}>{extra.japanese}</button></div><div className="progress-grid"><div><Clock3 size={20} /><strong>{currentStats.minutes}</strong><span>{extra.minutesSpoken}</span></div><div><AudioLines size={20} /><strong>{currentStats.sessions}</strong><span>{extra.sessionCount}</span></div><div><BarChart3 size={20} /><strong>{currentStats.average === null ? '—' : currentStats.average}</strong><span>{extra.aiAverage}</span></div></div><LearningProgressDashboard sessions={sessions} language={tab === 'all' ? undefined : tab} uiLanguage={uiLanguage} onManage={() => navigate('records')} /><div className="section-head compact"><h2>{extra.focusAreas}</h2></div>{currentStats.weaknesses.length ? <div className="chip-list">{currentStats.weaknesses.map(item => <span key={item}>{item}</span>)}</div> : <div className="empty-state"><Target size={25} /><strong>{extra.noFocus}</strong><p>{extra.focusHint}</p></div>}<div className="section-head compact"><h2>{extra.recent}</h2></div>{sessions.filter(s => tab === 'all' || s.language === tab).length ? sessions.filter(s => tab === 'all' || s.language === tab).slice(0, 8).map(item => <button className="recent-card" key={item.id} onClick={() => openSession(item)}><span className="recent-icon">{languages[item.language].flag}</span><span><strong>{modeText(item.mode).title}</strong><small>{new Date(item.startedAt).toLocaleDateString(dateLocale)} · {item.turns.length} {extra.answers}</small></span><ChevronRight size={18} /></button>) : <p className="empty-copy">{extra.firstSession}</p>}</>}
       {page === 'profile' && <><div className="page-intro"><span className="section-kicker">{extra.yourSpace}</span><h1>{extra.personal}<br /><em>{extra.personalEm}</em></h1><p>{extra.localProfile}</p></div><div className="profile-card"><span className="profile-avatar"><UserRound size={28} /></span><div><strong>{authUser?.email || extra.guest}</strong><small>{authUser ? authCopy[uiLanguage].active : extra.noAccount}</small></div></div>{authUser && <section className="consent-status"><div><strong>{consentCopy[uiLanguage].section}</strong><small>{trainingConsent === 'training' ? consentCopy[uiLanguage].statusTraining : consentCopy[uiLanguage].statusLocal}</small></div><button onClick={() => setConsentOpen(true)}>{consentCopy[uiLanguage].change}</button></section>}<div className="section-head compact"><h2>{extra.languageProfiles}</h2></div>{(['en', 'ja'] as const).map(id => <div className="profile-language" key={id}><span className="recent-icon">{languages[id].flag}</span><span><strong>{studyName(id)}</strong><small>{getStats(sessions, id).sessions} {extra.deviceSessions}</small></span></div>)}<div className="info-note"><CircleHelp size={18} /><span>{extra.historyNote}</span></div><div className="section-head compact"><h2>{extra.about}</h2></div><p className="about-copy">{extra.aboutCopy}</p></>}
       {page === 'profile' && <button className="recent-card recording-entry" onClick={() => navigate('recordings')}><span className="recent-icon"><AudioLines size={21} /></span><span><strong>{text.recordings}</strong><small>{extra.historyNote}</small></span><ChevronRight size={18} /></button>}
+      {page === 'profile' && <section className="profile-control-list"><button className="profile-control" onClick={() => setAuthOpen(true)}><span className="recent-icon">{authUser ? (authUser.email?.slice(0, 1).toUpperCase() || <UserRound size={17} />) : <LogIn size={19} />}</span><span><strong>{authUser ? profileControls[uiLanguage].accountSignedIn : profileControls[uiLanguage].account}</strong><small>{authUser?.email || profileControls[uiLanguage].accountHint}</small></span><ChevronRight size={18} /></button><button className="profile-control" onClick={openSettings}><span className="recent-icon"><Settings2 size={20} /></span><span><strong>{profileControls[uiLanguage].settings}</strong><small>{profileControls[uiLanguage].settingsHint}</small></span><ChevronRight size={18} /></button><button className={'profile-control listening-control ' + (questionBlurred ? 'selected' : '')} onClick={() => setQuestionBlurred(value => !value)}><span className="recent-icon"><Volume2 size={20} /></span><span><strong>{profileControls[uiLanguage].listening}</strong><small>{profileControls[uiLanguage].listeningHint}</small></span><b>{questionBlurred ? profileControls[uiLanguage].on : profileControls[uiLanguage].off}</b></button></section>}
       {page === 'recordings' && <RecordingLibrary sessions={sessions} uiLanguage={uiLanguage} accessCode={accessCode} onEditAccessCode={openSettings} onDeleted={recordingDeleted} />}
       {page === 'records' && <LearningRecordManager sessions={sessions} uiLanguage={uiLanguage} onOpen={openSession} onDelete={learningRecordsDeleted} />}
       {page === 'setup' && <p className="center-note recording-disclosure">{localRecordingDisclosure[uiLanguage]}</p>}

@@ -158,3 +158,16 @@ h1 em { font-style:normal; color:var(--accent); font-weight:400; }
 :root[data-theme='dark'] .progress-line-chart polyline { stroke: #E6397C; }
 :root[data-theme='dark'] .progress-line-chart circle { fill: #F59ABD; }
 :root[data-theme='dark'] .record-manager-toolbar .record-delete-button { color: #FFB5C4; background: #512533; }
+.questions-blurred .question-card h2 { filter: blur(9px); user-select: none; }
+.questions-blurred .question-card h2::selection { color: transparent; background: transparent; }
+.profile-control-list { display: grid; gap: 9px; margin-top: 12px; }
+.profile-control { width: 100%; min-height: 70px; display: flex; align-items: center; gap: 12px; text-align: left; border: 1px solid var(--line); border-radius: 13px; background: var(--card); color: var(--green); padding: 11px; }
+.profile-control > span:nth-child(2) { min-width: 0; flex: 1; display: grid; gap: 5px; }
+.profile-control strong { color: var(--ink); font-size: 12px; }
+.profile-control small { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-control > b { color: var(--muted); font-size: 10px; }
+.profile-control.listening-control.selected { border-color: var(--green); background: var(--soft); }
+.profile-control.listening-control.selected > b { color: var(--green); }
+:root[data-theme='dark'] .profile-control { background: var(--card); }
+:root[data-theme='dark'] .profile-control.listening-control.selected { background: #33232C; border-color: #E6397C; }
+:root[data-theme='dark'] .profile-control.listening-control.selected > b { color: #F59ABD; }
