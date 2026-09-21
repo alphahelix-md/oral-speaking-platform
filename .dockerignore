@@ -1,0 +1,11 @@
+.git
+.next
+node_modules
+npm-debug.log*
+.env*
+!.env.example
+!.env.china.example
+!.env.global.example
+RESEARCH
+scripts/poc-*
+technology_candidates.json

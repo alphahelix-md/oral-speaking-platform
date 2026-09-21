@@ -6,14 +6,15 @@ import type { UiLanguage } from '@/lib/ui-translations';
 import { ieltsPartAt } from '@/exams/ielts/plan';
 import { ieltsQuestionSet } from '@/exams/ielts/bank';
 import { buildDeliveryEvidence } from '@/lib/speech/evidence';
+import { getAllowedTextProviders, type RegionalTextProvider } from '@/lib/runtime/region';
 
-export type TextProvider = 'openai' | 'deepseek' | 'glm';
+export type TextProvider = RegionalTextProvider;
 const providerConfig: Record<TextProvider, { key?: string; model: string; url: string; format: 'responses' | 'chat' }> = {
   openai: { key: process.env.OPENAI_API_KEY, model: process.env.OPENAI_TEXT_MODEL || 'gpt-4.1-mini', url: 'https://api.openai.com/v1/responses', format: 'responses' },
   deepseek: { key: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_TEXT_MODEL || 'deepseek-flash', url: 'https://api.deepseek.com/chat/completions', format: 'chat' },
   glm: { key: process.env.GLM_API_KEY, model: process.env.GLM_TEXT_MODEL || 'glm-4.7-flash', url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', format: 'chat' },
 };
-export const aiAvailable = Object.values(providerConfig).some(provider => Boolean(provider.key));
+export const aiAvailable = getAllowedTextProviders().some(provider => Boolean(providerConfig[provider].key));
 
 async function generate(provider: TextProvider, instructions: string, input: string, timeoutMs = 20_000): Promise<string> {
   const config = providerConfig[provider];

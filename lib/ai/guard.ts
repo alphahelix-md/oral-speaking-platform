@@ -37,6 +37,19 @@ export async function guardBetaAccess(request: Request) {
 export async function guardBetaRequest(request: Request) {
   const accountId = await guardBetaAccess(request);
   if (process.env.NODE_ENV !== 'production') return;
+  const rateLimitProvider = setting('RATE_LIMIT_PROVIDER') || 'upstash';
+  if (rateLimitProvider === 'access-code-only') {
+    if (setting('DEPLOYMENT_STAGE') !== 'test') {
+      console.error('[BETA_GUARD_CONFIG]', { rateLimitProvider, deploymentStage: setting('DEPLOYMENT_STAGE') || 'unset' });
+      throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
+    }
+    console.warn('[BETA_GUARD_TEST_MODE]', { rateLimitProvider });
+    return;
+  }
+  if (rateLimitProvider !== 'upstash') {
+    console.error('[BETA_GUARD_CONFIG]', { rateLimitProvider });
+    throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
+  }
   const limit = Number(setting('BETA_DAILY_REQUEST_LIMIT'));
   if (!Number.isInteger(limit) || limit < 1) {
     console.error('[BETA_GUARD_CONFIG]', { requestId: request.headers.get('x-speech-request-id') || undefined, validLimit: false });

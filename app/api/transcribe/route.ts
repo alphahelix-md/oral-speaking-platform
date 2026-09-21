@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { guardBetaRequest, guardErrorResponse } from '@/lib/ai/guard';
 import { getSpeechProvider } from '@/lib/speech/provider-registry';
 import type { LanguageId } from '@/types/speaking';
+import { resolveSpeechProvider } from '@/lib/runtime/region';
 export async function POST(request: Request) {
   const requestIdHeader = request.headers.get('x-speech-request-id') || '';
   const requestId = /^sp_[a-zA-Z0-9_-]{6,64}$/.test(requestIdHeader) ? requestIdHeader : `sp_${crypto.randomUUID()}`;
@@ -10,7 +11,7 @@ export async function POST(request: Request) {
   try {
     await guardBetaRequest(request);
     const form = await request.formData(); const audio = form.get('audio'); const language = form.get('language');
-    const providerId = process.env.SPEECH_PROVIDER || 'glm';
+    const providerId = resolveSpeechProvider();
     console.info('[TRANSCRIBE] upload', { requestId, chunkIndex: request.headers.get('x-speech-chunk-index') || '0', hasFile: audio instanceof File, fileName: audio instanceof File ? audio.name : null, fileSize: audio instanceof File ? audio.size : null, mimeType: audio instanceof File ? audio.type : null, language: String(language), provider: providerId, model: providerId === 'glm' ? process.env.GLM_TRANSCRIBE_MODEL || 'glm-asr-2512' : process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe' });
     if (!(audio instanceof File) || audio.size === 0 || audio.size > 20_000_000 || !['en', 'ja'].includes(String(language))) return NextResponse.json({ error: 'INVALID_AUDIO_OR_LANGUAGE', requestId }, { status: 400, headers: { 'x-speech-request-id': requestId } });
     const result = await getSpeechProvider().transcribe(audio, language as LanguageId, requestId);
