@@ -111,3 +111,50 @@ h1 em { font-style:normal; color:var(--accent); font-weight:400; }
 :root[data-theme='dark'] .language-symbol,:root[data-theme='dark'] .recent-icon,:root[data-theme='dark'] .mode-icon,:root[data-theme='dark'] .round-arrow,:root[data-theme='dark'] .avatar,:root[data-theme='dark'] .profile-avatar,:root[data-theme='dark'] .complete-icon { background:#33232C; color:#F59ABD; }
 :root[data-theme='dark'] .language-card.ja .language-symbol,:root[data-theme='dark'] .setup-panel select,:root[data-theme='dark'] .pause-button,:root[data-theme='dark'] .notice,:root[data-theme='dark'] .feedback-card .feedback-disclaimer { background:#1A1A1D; color:#F4EDF0; border-color:#704456; }
 :root[data-theme='dark'] .question-label,:root[data-theme='dark'] .listen-button,:root[data-theme='dark'] .turn-actions button,:root[data-theme='dark'] .recording-copy,:root[data-theme='dark'] .recording-code-link,:root[data-theme='dark'] .access-code-reminder button { color:#F59ABD; }
+
+.learning-dashboard { margin-top: 2px; }
+.manage-records-link { border: 0; background: var(--soft); color: var(--green); border-radius: 9px; padding: 8px 10px; font-size: 10px; font-weight: 800; }
+.progress-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin: 14px 0; }
+.progress-detail-grid > div { min-height: 89px; padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--green); display: grid; align-content: start; gap: 4px; }
+.progress-detail-grid strong { color: var(--ink); font-size: 22px; margin-top: 3px; }
+.progress-detail-grid span { color: var(--muted); font-size: 10px; }
+.progress-panel { border: 1px solid var(--line); border-radius: 15px; padding: 15px; background: var(--card); margin-top: 11px; }
+.progress-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink); font-size: 11px; }
+.progress-panel-head > span { display: flex; align-items: center; gap: 3px; color: var(--muted); font-size: 9px; white-space: nowrap; }
+.activity-heatmap { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; margin-top: 16px; overflow: hidden; }
+.activity-week { display: grid; grid-template-rows: repeat(7, 1fr); gap: 4px; }
+.activity-dot { display: block; aspect-ratio: 1; border-radius: 4px; background: color-mix(in srgb, var(--line) 58%, transparent); }
+.activity-dot.level-1 { background: color-mix(in srgb, var(--green) 25%, var(--card)); }
+.activity-dot.level-2 { background: color-mix(in srgb, var(--green) 46%, var(--card)); }
+.activity-dot.level-3 { background: color-mix(in srgb, var(--green) 70%, var(--card)); }
+.activity-dot.level-4 { background: var(--green); }
+.trend-panel { padding-bottom: 11px; }
+.progress-line-chart { width: 100%; height: 115px; overflow: visible; margin-top: 12px; }
+.progress-line-chart line { stroke: var(--line); stroke-width: .7; }
+.progress-line-chart polyline { fill: none; stroke: var(--green); stroke-width: 2.1; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.progress-line-chart circle { fill: var(--accent); vector-effect: non-scaling-stroke; }
+.trend-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 9px; }
+.progress-empty { margin-top: 13px; }
+.record-manager .page-intro p { max-width: none; }
+.record-manager-toolbar { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; margin: 22px 0 13px; }
+.record-manager-toolbar > button { border: 0; background: var(--soft); color: var(--green); border-radius: 9px; min-height: 36px; padding: 0 10px; display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 800; }
+.record-manager-toolbar > span { color: var(--muted); text-align: center; font-size: 10px; }
+.record-manager-toolbar .record-delete-button { background: color-mix(in srgb, #d94c58 14%, var(--card)); color: #b12f3e; }
+.record-manager-toolbar .record-delete-button:disabled { opacity: .42; }
+.record-manager-list { display: grid; gap: 10px; }
+.managed-record { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 11px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.managed-record.selected { border-color: var(--green); background: color-mix(in srgb, var(--soft) 70%, var(--card)); }
+.record-select,.managed-record-open { border: 0; background: none; color: var(--green); display: grid; place-items: center; padding: 5px; }
+.managed-record-main { min-width: 0; border: 0; background: none; color: var(--ink); text-align: left; display: grid; gap: 5px; padding: 2px; }
+.managed-record-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.managed-record-main small { color: var(--muted); font-size: 10px; }
+.managed-record-open { border-radius: 8px; background: var(--soft); padding: 8px; font-size: 10px; font-weight: 800; }
+:root[data-theme='dark'] .progress-detail-grid > div,:root[data-theme='dark'] .progress-panel,:root[data-theme='dark'] .managed-record { background: var(--card); }
+:root[data-theme='dark'] .manage-records-link,:root[data-theme='dark'] .record-manager-toolbar > button,:root[data-theme='dark'] .managed-record-open { color: #F59ABD; background: #33232C; }
+:root[data-theme='dark'] .activity-dot.level-1 { background: #493442; }
+:root[data-theme='dark'] .activity-dot.level-2 { background: #754157; }
+:root[data-theme='dark'] .activity-dot.level-3 { background: #A83C68; }
+:root[data-theme='dark'] .activity-dot.level-4 { background: #E6397C; }
+:root[data-theme='dark'] .progress-line-chart polyline { stroke: #E6397C; }
+:root[data-theme='dark'] .progress-line-chart circle { fill: #F59ABD; }
+:root[data-theme='dark'] .record-manager-toolbar .record-delete-button { color: #FFB5C4; background: #512533; }

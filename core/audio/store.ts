@@ -106,3 +106,17 @@ export async function deleteAudio(id: string): Promise<void> {
     });
   } finally { db.close(); }
 }
+
+export async function deleteAudioMany(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const db = await openDB();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      for (const id of new Set(ids)) store.delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally { db.close(); }
+}
