@@ -181,3 +181,36 @@ h1 em { font-style:normal; color:var(--accent); font-weight:400; }
 :root[data-theme='dark'] .quick-feedback { background:var(--card); }
 :root[data-theme='dark'] .quick-feedback-head { color:#F59ABD; }
 :root[data-theme='dark'] .quick-feedback-metrics span { background:#33232C; color:#F4EDF0; }
+
+/* Light palette: research pink and blue, adapted from five reference swatches. */
+:root:not([data-theme='dark']) {
+  --ink:#40546A;
+  --muted:#718196;
+  --green:#E1829D;
+  --cream:#FFFFFF;
+  --line:#F4A7B9;
+  --soft:#FADADD;
+  --page:#FADADD;
+  --card:#FFFFFF;
+  --hero:#BFD7EA;
+  --hero-ink:#5B7FB9;
+  --accent:#E1829D;
+  --accent-soft:#F4A7B9;
+  --secondary:#BFD7EA;
+}
+:root:not([data-theme='dark']) .light-swatch i:nth-child(1){background:#FADADD}
+:root:not([data-theme='dark']) .light-swatch i:nth-child(2){background:#F4A7B9}
+:root:not([data-theme='dark']) .light-swatch i:nth-child(3){background:#E1829D}
+:root:not([data-theme='dark']) .light-swatch i:nth-child(4){background:#BFD7EA}
+:root:not([data-theme='dark']) .light-swatch i:nth-child(5){background:#5B7FB9}
+:root:not([data-theme='dark']) .section-kicker,:root:not([data-theme='dark']) .question-label,:root:not([data-theme='dark']) .listen-button,:root:not([data-theme='dark']) .turn-actions button { color:#5B7FB9; }
+:root:not([data-theme='dark']) .section-number,:root:not([data-theme='dark']) .topbar-caption { color:#718196; }
+:root:not([data-theme='dark']) .language-card.ja .language-symbol { background:#FADADD; color:#E1829D; }
+:root:not([data-theme='dark']) .round-arrow,:root:not([data-theme='dark']) .language-switch,:root:not([data-theme='dark']) .session-progress,:root:not([data-theme='dark']) .score-track { background:#BFD7EA; color:#5B7FB9; }
+:root:not([data-theme='dark']) .language-switch button { color:#5B7FB9; }
+:root:not([data-theme='dark']) .language-switch button.selected { color:#5B7FB9; background:#FFFFFF; }
+:root:not([data-theme='dark']) .question-card,:root:not([data-theme='dark']) .profile-card,:root:not([data-theme='dark']) .info-note,:root:not([data-theme='dark']) .empty-state { background:#BFD7EA; color:#40546A; }
+:root:not([data-theme='dark']) .language-symbol,:root:not([data-theme='dark']) .recent-icon,:root:not([data-theme='dark']) .mode-icon,:root:not([data-theme='dark']) .avatar,:root:not([data-theme='dark']) .profile-avatar,:root:not([data-theme='dark']) .complete-icon { background:#BFD7EA; color:#5B7FB9; }
+:root:not([data-theme='dark']) .mic-button { box-shadow:0 0 0 11px color-mix(in srgb,#BFD7EA 58%,#FFFFFF),0 0 0 22px color-mix(in srgb,#BFD7EA 28%,#FFFFFF); }
+:root:not([data-theme='dark']) .notice { background:#FADADD; border-color:#F4A7B9; color:#5B7FB9; }
+:root:not([data-theme='dark']) .recording-indicator,:root:not([data-theme='dark']) .pulse-dot { color:#E1829D; background-color:#E1829D; }
