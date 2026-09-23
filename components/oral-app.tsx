@@ -86,6 +86,13 @@ const questionVoiceFallback: Record<UiLanguage, string> = {
   'zh-CN': '云端朗读暂不可用，已切换本机语音。', en: 'Cloud speech is unavailable. Using the device voice.', 'zh-HK': '雲端朗讀暫時無法使用，已切換至本機語音。', ja: 'クラウド読み上げを利用できないため、端末の音声に切り替えました。',
 };
 
+const browserTranscriptionFallback: Record<UiLanguage, string> = {
+  'zh-CN': 'GLM 转写未完成，已使用浏览器识别结果。提交前请核对文字。',
+  en: 'GLM transcription was unavailable. Using browser recognition; check the text before submitting.',
+  'zh-HK': 'GLM 轉寫未完成，已使用瀏覽器辨識結果。提交前請核對文字。',
+  ja: 'GLM の文字起こしを利用できなかったため、ブラウザの認識結果を使用しました。送信前に確認してください。',
+};
+
 const transcriptionLanguageMismatch: Record<UiLanguage, string> = {
   'zh-CN': '识别结果不是当前练习语言，请重新分析或手动输入。',
   en: 'The result was not in the practice language. Retry analysis or type your answer.',
@@ -364,7 +371,11 @@ export function OralApp() {
       setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setTranscript(''); setSeconds(0); setPendingAudioId(null); setAudioSaveFailed(false); transcriptionProgress.current = null;
       const freeTranscriber = new BrowserTranscriber();
       browserTranscriber.current = freeTranscriber;
-      const freeStarted = browserTranscriptionSupported() && freeTranscriber.start(language, text => { setTranscript(text); setTranscriptResult({ text, language, provider: 'browser-speech-recognition' }); });
+      const freeStarted = browserTranscriptionSupported() && freeTranscriber.start(language, text => {
+        if (browserTranscriber.current !== freeTranscriber) return;
+        setTranscript(text);
+        setTranscriptResult({ text, language, provider: 'browser-speech-recognition' });
+      });
       if (freeStarted) setProcessingStage(voice.transcribing); else setNotice(extra.transcription);
       setRecording(true); setPaused(false);
       setSession(s => s && speakingReducer(s, { type: 'STATUS', status: 'recording' }));
@@ -375,7 +386,7 @@ export function OralApp() {
     } finally { setProcessingStage(''); recordingLock.current = false; }
   }
   function togglePause() { if (!recorder.current) return; if (paused) recorder.current.resume(); else recorder.current.pause(); setPaused(!paused); }
-  async function analyzeAudio(blob: Blob, measuredDurationSeconds?: number) {
+  async function analyzeAudio(blob: Blob, measuredDurationSeconds?: number, browserFallbackText?: string) {
     if (analysisLock.current) return;
     analysisLock.current = true; setBusy(true); setProcessingStage(voice.transcribing);
     const parts = transcriptionProgress.current?.blob === blob ? [...transcriptionProgress.current.parts] : [];
@@ -415,6 +426,13 @@ export function OralApp() {
       setSpeechDiagnostic(previous => ({ ...previous, uploadStatus: 'complete', errorCode: undefined }));
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'TRANSCRIPTION_FAILED';
+      if (browserFallbackText) {
+        setTranscript(browserFallbackText);
+        setTranscriptResult({ text: browserFallbackText, language, provider: 'browser-speech-recognition' });
+        setSpeechDiagnostic(previous => ({ ...previous, provider: 'browser-speech-recognition', uploadStatus: 'browser fallback', errorCode: reason }));
+        setNotice(browserTranscriptionFallback[uiLanguage]);
+        return;
+      }
       setSpeechDiagnostic(previous => ({ ...previous, uploadStatus: 'error', errorCode: reason }));
       const detail = reason === 'AUTH_REQUIRED' ? authCopy[uiLanguage].needSignIn : reason === 'AUTH_ACCESS_CODE_MISMATCH' ? authCopy[uiLanguage].codeMismatch : reason === 'BETA_DAILY_LIMIT_REACHED' ? speechErrors[uiLanguage].betaDailyLimit : reason === 'BETA_ACCESS_DENIED' ? speechErrors[uiLanguage].betaAccessDenied : reason === 'BETA_GUARD_NOT_CONFIGURED' ? speechErrors[uiLanguage].betaUnavailable : reason === 'GLM_NOT_CONFIGURED' ? speechErrors[uiLanguage].glmMissing : reason === 'GLM_KEY_INVALID' ? speechErrors[uiLanguage].glmInvalid : reason === 'GLM_QUOTA_OR_LIMIT' ? speechErrors[uiLanguage].glmQuota : reason === 'TRANSCRIPT_LANGUAGE_MISMATCH' ? transcriptionLanguageMismatch[uiLanguage] : reason === 'EMPTY_TRANSCRIPT' ? speechErrors[uiLanguage].emptyTranscript : speechErrors[uiLanguage].transcriptionFailed;
       setNotice(parts.some(Boolean) ? `${speechErrors[uiLanguage].partialTranscript} ${detail}` : detail);
@@ -453,11 +471,9 @@ export function OralApp() {
         setAudioSaveFailed(true);
       }
       if (result.metrics.durationSeconds < 0.8) { setNotice(voice.short); return; }
-      if (freeText && matchesTranscriptionLanguage(freeText, language)) {
-        setTranscript(freeText);
-        setTranscriptResult({ text: freeText, language, provider: 'browser-speech-recognition' });
-        setSpeechDiagnostic(previous => ({ ...previous, provider: 'browser-speech-recognition', uploadStatus: 'not needed' }));
-      } else await analyzeAudio(stableAudio, result.metrics.durationSeconds);
+      setTranscript(''); setTranscriptResult(null);
+      await analyzeAudio(stableAudio, result.metrics.durationSeconds,
+        freeText && matchesTranscriptionLanguage(freeText, language) ? freeText : undefined);
     } catch (error) {
       setNotice(extra.recordFailed);
       setSpeechDiagnostic(previous => ({ ...previous, errorCode: error instanceof Error ? error.name : 'RECORDING_STOP_FAILED' }));
