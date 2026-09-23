@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { aiAvailable, nextQuestion, UpstreamAiError } from '@/lib/ai/server';
+import { aiAvailable, UpstreamAiError } from '@/lib/ai/server';
 import { transcriptTextEvaluator } from '@/lib/speech/text-evaluator';
 import { guardBetaAccess, guardErrorResponse } from '@/lib/ai/guard';
 import { resolveTextProvider } from '@/lib/runtime/region';
+import { runCapability } from '@/lib/ai/capability-router';
 
 const pauseIntervalSchema = z.object({ startSeconds: z.number().min(0), endSeconds: z.number().min(0), durationSeconds: z.number().min(0) });
 const audioMetricsSchema = z.object({ durationSeconds: z.number().min(0), speakingDurationSeconds: z.number().min(0), silenceDurationSeconds: z.number().min(0), silenceRatio: z.number().min(0).max(1), pauseCount: z.number().int().min(0), longPauseCount: z.number().int().min(0), longPauseIntervals: z.array(pauseIntervalSchema).max(100).default([]), averagePauseDurationSeconds: z.number().min(0), audioEnergy: z.number().min(0), volumeVariation: z.number().min(0), analysisAvailable: z.boolean() });
-const requestSchema = z.object({ action: z.enum(['next', 'evaluate']), provider: z.enum(['openai', 'deepseek', 'glm']).default('openai'), uiLanguage: z.enum(['zh-CN', 'en', 'zh-HK', 'ja']).default('en'), language: z.enum(['en', 'ja']), mode: z.enum(['ielts', 'daily', 'scenario', 'topic', 'free-talk', 'toefl', 'interview', 'weakness']), topic: z.string().max(120), level: z.string().max(60), questionSetId: z.string().max(32).optional(), turns: z.array(z.object({ id: z.string(), question: z.string().max(1000), transcript: z.string().max(4000), createdAt: z.string(), attempt: z.number(), durationSeconds: z.number(), audioId: z.string().optional(), aiResponse: z.string().optional(), audioMetrics: audioMetricsSchema.optional() })).max(20) });
+const requestSchema = z.object({ action: z.literal('evaluate'), uiLanguage: z.enum(['zh-CN', 'en', 'zh-HK', 'ja']).default('en'), language: z.enum(['en', 'ja']), mode: z.enum(['ielts', 'daily', 'scenario', 'topic', 'free-talk', 'toefl', 'interview', 'weakness']), topic: z.string().max(120), level: z.string().max(60), turns: z.array(z.object({ id: z.string(), question: z.string().max(1000), transcript: z.string().max(4000), createdAt: z.string(), attempt: z.number(), durationSeconds: z.number(), audioId: z.string().optional(), aiResponse: z.string().optional(), audioMetrics: audioMetricsSchema.optional() })).max(20) });
 function diagnosticCode(error: unknown) {
   if (error instanceof z.ZodError) return 'INVALID_REQUEST_OR_RESPONSE';
   if (error instanceof SyntaxError) return 'INVALID_JSON';
@@ -21,21 +22,19 @@ function diagnosticCode(error: unknown) {
 }
 export async function POST(request: Request) {
   const startedAt = Date.now();
-  let action: 'next' | 'evaluate' | undefined;
+  let action: 'evaluate' | undefined;
   let provider: ReturnType<typeof resolveTextProvider> | undefined;
   try {
     await guardBetaAccess(request);
     if (!aiAvailable) return NextResponse.json({ error: 'AI_NOT_CONFIGURED' }, { status: 503 });
     const input = requestSchema.parse(await request.json());
     action = input.action;
-    provider = resolveTextProvider(input.provider);
+    provider = resolveTextProvider();
     console.info('[AI_REQUEST]', { action, provider });
-    if (action === 'next') {
-      const question = await nextQuestion(provider, input.language, input.mode, input.topic, input.level, input.turns, input.questionSetId);
-      console.info('[AI_SUCCESS]', { action, provider, durationMs: Date.now() - startedAt });
-      return NextResponse.json({ question });
-    }
-    const evaluation = await transcriptTextEvaluator.evaluate(provider, input.language, input.mode, input.turns, input.uiLanguage);
+    const result = await runCapability('content_evaluation', { primary: provider }, selected =>
+      transcriptTextEvaluator.evaluate(selected, input.language, input.mode, input.turns, input.uiLanguage));
+    provider = result.provider;
+    const evaluation = result.value;
     console.info('[AI_SUCCESS]', { action, provider, durationMs: Date.now() - startedAt });
     return NextResponse.json({ evaluation });
   } catch (error) {
