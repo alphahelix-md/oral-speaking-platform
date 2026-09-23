@@ -9,6 +9,11 @@ import { buildDeliveryEvidence } from '@/lib/speech/evidence';
 import { getAllowedTextProviders, type RegionalTextProvider } from '@/lib/runtime/region';
 
 export type TextProvider = RegionalTextProvider;
+export class UpstreamAiError extends Error {
+  constructor(readonly status: number, readonly providerCode?: string, readonly retryAfterSeconds?: number) {
+    super(`AI service error ${status}`);
+  }
+}
 const providerConfig: Record<TextProvider, { key?: string; model: string; url: string; format: 'responses' | 'chat' }> = {
   openai: { key: process.env.OPENAI_API_KEY, model: process.env.OPENAI_TEXT_MODEL || 'gpt-4.1-mini', url: 'https://api.openai.com/v1/responses', format: 'responses' },
   deepseek: { key: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_TEXT_MODEL || 'deepseek-flash', url: 'https://api.deepseek.com/chat/completions', format: 'chat' },
@@ -26,21 +31,31 @@ async function generate(provider: TextProvider, instructions: string, input: str
     method: 'POST', headers: { Authorization: `Bearer ${config.key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(requestBody), cache: 'no-store', signal: AbortSignal.timeout(timeoutMs)
   });
-  if (!response.ok) throw new Error(`AI service error ${response.status}`);
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    const rawCode = body && typeof body === 'object' && 'error' in body && body.error && typeof body.error === 'object' && 'code' in body.error ? body.error.code : undefined;
+    const providerCode = typeof rawCode === 'number' || typeof rawCode === 'string' && /^[a-zA-Z0-9_-]{1,32}$/.test(rawCode) ? String(rawCode) : undefined;
+    const rawRetryAfter = response.headers.get('retry-after');
+    const retryAfterSeconds = rawRetryAfter && /^\d+$/.test(rawRetryAfter) ? Number(rawRetryAfter) : undefined;
+    throw new UpstreamAiError(response.status, providerCode, retryAfterSeconds);
+  }
   const responseBody = await response.json();
   if (config.format === 'responses') return responseBody.output?.flatMap((item: { content?: { type: string; text?: string }[] }) => item.content || []).filter((item: { type: string }) => item.type === 'output_text').map((item: { text?: string }) => item.text || '').join('') || '';
   return responseBody.choices?.[0]?.message?.content || '';
 }
 
 async function generateWithRetry(provider: TextProvider, instructions: string, input: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + Math.min(timeoutMs + 3_000, 18_000);
   try { return await generate(provider, instructions, input, timeoutMs); }
   catch (firstError) {
-    const message = firstError instanceof Error ? firstError.message : '';
-    const retryable = firstError instanceof TypeError || /timeout|AI service error (408|429|5\d\d)/i.test(message);
+    const retryable = firstError instanceof TypeError || firstError instanceof UpstreamAiError && (firstError.status === 408 || firstError.status === 429 || firstError.status >= 500);
     if (!retryable) throw firstError;
-    await new Promise(resolve => setTimeout(resolve, 350));
-    try { return await generate(provider, instructions, input, timeoutMs); }
-    catch { throw firstError; }
+    if (firstError instanceof UpstreamAiError && firstError.retryAfterSeconds && firstError.retryAfterSeconds > 2) throw firstError;
+    const delayMs = firstError instanceof UpstreamAiError && firstError.status === 429 ? Math.max(1000, (firstError.retryAfterSeconds || 0) * 1000) : 350;
+    if (deadline - Date.now() - delayMs < 1_500) throw firstError;
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+    try { return await generate(provider, instructions, input, Math.min(timeoutMs, deadline - Date.now())); }
+    catch (secondError) { throw secondError; }
   }
 }
 
@@ -48,7 +63,7 @@ export async function nextQuestion(provider: TextProvider, language: LanguageId,
   const config = languages[language]; const training = modes[mode];
   const history = turns.map(t => `Examiner: ${t.question}\nLearner: ${t.transcript}`).join('\n');
   const stage = mode === 'ielts' ? `Stay in IELTS Speaking Part ${ieltsPartAt(topic, turns.length)}. The question set theme is ${ieltsQuestionSet(questionSetId).theme}. Ask a relevant follow-up for this part and theme only; do not move to another part.` : '';
-  const output = await generateWithRetry(provider, `${config.conversationPrompt}\n${training.prompt}\n${stage}\nLevel: ${level}. Topic: ${topic}. Return ONLY the next question, under 35 words. Language: ${config.name}.`, `Conversation so far:\n${history}\nAsk one relevant follow-up.`, 8_000);
+  const output = await generateWithRetry(provider, `${config.conversationPrompt}\n${training.prompt}\n${stage}\nLevel: ${level}. Topic: ${topic}. Return ONLY the next question, under 35 words. Language: ${config.name}.`, `Conversation so far:\n${history}\nAsk one relevant follow-up.`, 15_000);
   const question = output.trim().replace(/^['"“”]|['"“”]$/g, '').slice(0, 500);
   if (!question) throw new Error('AI_EMPTY_QUESTION');
   return question;

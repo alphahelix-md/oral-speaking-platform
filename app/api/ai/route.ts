@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { aiAvailable, nextQuestion } from '@/lib/ai/server';
+import { aiAvailable, nextQuestion, UpstreamAiError } from '@/lib/ai/server';
 import { transcriptTextEvaluator } from '@/lib/speech/text-evaluator';
 import { guardBetaAccess, guardErrorResponse } from '@/lib/ai/guard';
 import { resolveTextProvider } from '@/lib/runtime/region';
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ evaluation });
   } catch (error) {
     const guard = guardErrorResponse(error); if (guard) return NextResponse.json({ error: guard.error }, { status: guard.status });
-    console.error('[AI_ERROR]', { action, provider, code: diagnosticCode(error), upstreamStatus: error instanceof Error && /^AI service error \d{3}$/.test(error.message) ? Number(error.message.slice(-3)) : undefined, durationMs: Date.now() - startedAt });
+    console.error('[AI_ERROR]', { action, provider, code: diagnosticCode(error), upstreamStatus: error instanceof UpstreamAiError ? error.status : undefined, providerCode: error instanceof UpstreamAiError ? error.providerCode : undefined, durationMs: Date.now() - startedAt });
     if (error instanceof z.ZodError) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     return NextResponse.json({ error: error instanceof Error ? error.message : 'AI unavailable' }, { status: 502 });
   }
