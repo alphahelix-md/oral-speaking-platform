@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import { AccountGuardError, guardAccountRequest } from '@/lib/auth/supabase-server';
 
 class GuardError extends Error {
@@ -6,20 +5,6 @@ class GuardError extends Error {
 }
 
 function setting(name: string) { return process.env[name]?.trim(); }
-
-async function redis(command: string[]) {
-  const url = setting('UPSTASH_REDIS_REST_URL'); const token = setting('UPSTASH_REDIS_REST_TOKEN');
-  if (!url || !token) {
-    console.error('[BETA_GUARD_CONFIG]', { hasRedisUrl: Boolean(url), hasRedisToken: Boolean(token) });
-    throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
-  }
-  const response = await fetch(`${url.replace(/\/$/, '')}/${command.map(encodeURIComponent).join('/')}`, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
-  if (!response.ok) {
-    console.error('[BETA_GUARD_REDIS]', { status: response.status });
-    throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
-  }
-  return response.json() as Promise<{ result: number | string | null }>;
-}
 
 export async function guardBetaAccess(request: Request) {
   const account = await guardAccountRequest(request);
@@ -32,47 +17,6 @@ export async function guardBetaAccess(request: Request) {
   }
   if (!codes.includes(code)) throw new GuardError('BETA_ACCESS_DENIED');
   return account?.id;
-}
-
-export async function guardBetaRequest(request: Request) {
-  const accountId = await guardBetaAccess(request);
-  if (process.env.NODE_ENV !== 'production') return;
-  const rateLimitProvider = setting('RATE_LIMIT_PROVIDER') || 'upstash';
-  if (rateLimitProvider === 'access-code-only') {
-    if (setting('DEPLOYMENT_STAGE') !== 'test') {
-      console.error('[BETA_GUARD_CONFIG]', { rateLimitProvider, deploymentStage: setting('DEPLOYMENT_STAGE') || 'unset' });
-      throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
-    }
-    console.warn('[BETA_GUARD_TEST_MODE]', { rateLimitProvider });
-    return;
-  }
-  if (rateLimitProvider !== 'upstash') {
-    console.error('[BETA_GUARD_CONFIG]', { rateLimitProvider });
-    throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
-  }
-  const limit = Number(setting('BETA_DAILY_REQUEST_LIMIT'));
-  if (!Number.isInteger(limit) || limit < 1) {
-    console.error('[BETA_GUARD_CONFIG]', { requestId: request.headers.get('x-speech-request-id') || undefined, validLimit: false });
-    throw new GuardError('BETA_GUARD_NOT_CONFIGURED');
-  }
-
-  const code = request.headers.get('x-beta-access-code')?.trim() || '';
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  const day = new Date().toISOString().slice(0, 10);
-  const fingerprint = createHash('sha256').update(`${code}:${accountId || ip}`).digest('hex').slice(0, 24);
-  const key = `oral:beta:v3:${day}:${fingerprint}`;
-  const speechRequestId = request.headers.get('x-speech-request-id')?.trim() || '';
-  const isChunkedSpeech = /^sp_[a-zA-Z0-9_-]{6,64}$/.test(speechRequestId);
-  const recordingKey = isChunkedSpeech
-    ? `oral:beta:v3:recording:${day}:${fingerprint}:${createHash('sha256').update(speechRequestId).digest('hex').slice(0, 24)}`
-    : '';
-  if (recordingKey && (await redis(['get', recordingKey])).result) return;
-  const current = Number((await redis(['get', key])).result || 0);
-  if (current >= limit) throw new GuardError('BETA_DAILY_LIMIT_REACHED');
-  const next = Number((await redis(['incr', key])).result);
-  if (next === 1) await redis(['expire', key, '86400']);
-  if (next > limit) throw new GuardError('BETA_DAILY_LIMIT_REACHED');
-  if (recordingKey) await redis(['set', recordingKey, '1', 'ex', '86400']);
 }
 
 export function guardErrorResponse(error: unknown) {

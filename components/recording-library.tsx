@@ -128,7 +128,7 @@ export function RecordingLibrary({ onResume, sessions, uiLanguage, accessCode, o
         form.append('language', language);
         const response = await fetch('/api/transcribe', {
           method: 'POST',
-          headers: { 'x-beta-access-code': accessCode, ...(await getSupabaseAuthHeaders()), 'x-speech-request-id': requestId, 'x-speech-chunk-index': String(index) },
+          headers: { 'x-beta-access-code': accessCode, ...(await getSupabaseAuthHeaders()), 'x-speech-request-id': requestId, 'x-speech-chunk-index': String(index), 'x-oral-session-id': entry.metadata?.sessionId || linked?.session.id || entry.id },
           body: form,
         });
         const data = await response.json();

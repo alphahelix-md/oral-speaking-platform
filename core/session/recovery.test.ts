@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSession, speakingReducer } from '@/core/speaking/engine';
-import { commitDraft, recoverSession, transcribeDraft } from './recovery';
+import { commitDraft, recoverSession, RequestNotSentError, transcribeDraft } from './recovery';
 import { getSessions, saveSession } from './storage';
 import type { AnswerDraft, Session } from '@/types/speaking';
 
@@ -63,7 +63,12 @@ describe('durable practice recovery', () => {
     session.draft!.audioId = 'raw'; session.draft!.audioStatus = 'failed';
     expect(() => commitDraft(session)).toThrow('AUDIO_NOT_VERIFIED');
     session.draft!.audioStatus = 'verified';
-    expect(commitDraft(session).turns[0]).toMatchObject({ audioId: 'raw', transcript: '' });
+    expect(commitDraft(session).turns[0]).toMatchObject({ audioId: 'raw', transcript: '', audioStatus: 'verified', transcriptionStatus: 'skipped', transcriptionChunks: [] });
+  });
+  it('retains completed chunk states and manual corrections after submission', () => {
+    const session = fresh(); session.draft = { ...session.draft!, transcript: 'Edited answer', transcriptEdited: true, audioId: 'raw', audioStatus: 'verified', chunks: [{ status: 'succeeded', text: 'Provider answer' }] };
+    saveSession(commitDraft(session, 'Next'));
+    expect(getSessions()[0].turns[0]).toMatchObject({ transcript: 'Edited answer', transcriptionStatus: 'manual', transcriptionChunks: session.draft.chunks });
   });
   it('does not silently truncate older drafts when history exceeds 100 sessions', () => {
     const oldest = saveSession(fresh());
@@ -97,6 +102,15 @@ describe('durable transcription checkpoints', () => {
       refresh: () => { session = reload(); },
     };
   }
+  it('permits retry after a proven pre-provider rejection without losing edited text', async () => {
+    const h = harness(); h.checkpoint({ transcript: 'My correction', transcriptEdited: true });
+    const request = vi.fn().mockRejectedValueOnce(new RequestNotSentError('AUTH_REQUIRED'));
+    await expect(transcribeDraft(chunks, h.read, h.checkpoint, request)).rejects.toThrow('AUTH_REQUIRED');
+    h.refresh(); expect(h.read().chunks).toEqual([]);
+    request.mockResolvedValue('Provider text');
+    await transcribeDraft(chunks, h.read, h.checkpoint, request);
+    expect(h.read().transcript).toBe('My correction');
+  });
   it('does not request already successful chunks after refresh', async () => {
     const h = harness();
     h.checkpoint({ chunks: [{ status: 'succeeded', text: 'First' }], transcript: 'Edited first' }); h.refresh();

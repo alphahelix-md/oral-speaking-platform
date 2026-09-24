@@ -2,13 +2,14 @@ export type LanguageId = 'en' | 'ja';
 export type ModeId = 'ielts' | 'daily' | 'scenario' | 'topic' | 'free-talk' | 'toefl' | 'interview' | 'weakness';
 export type SessionStatus = 'idle' | 'ai-speaking' | 'listening' | 'recording' | 'processing' | 'thinking' | 'finished';
 import type { AudioMetrics, TranscriptResult } from '@/lib/speech/types';
-export type Turn = { id: string; question: string; transcript: string; audioId?: string; createdAt: string; attempt: number; durationSeconds: number; aiResponse?: string; examPart?: 1 | 2 | 3; audioMetrics?: AudioMetrics; transcriptResult?: TranscriptResult };
+export type Turn = { audioStatus?: 'verified' | 'none' | 'deleted'; transcriptionStatus?: 'manual' | 'succeeded' | 'partial' | 'skipped'; transcriptionChunks?: TranscriptionChunk[]; id: string; question: string; transcript: string; audioId?: string; createdAt: string; attempt: number; durationSeconds: number; aiResponse?: string; examPart?: 1 | 2 | 3; audioMetrics?: AudioMetrics; transcriptResult?: TranscriptResult };
 export type Score = { key: string; label: string; value: number; note: string };
 export type Evaluation = { summary: string; scores: Score[]; strengths: string[]; improvements: string[]; weaknesses: string[]; model: 'ai' | 'demo' | 'unavailable'; evidenceSources?: ('transcript' | 'basic_audio_metrics')[] };
 export type TranscriptionChunk = { status: 'running' | 'succeeded' | 'uncertain'; text?: string };
 export type AnswerDraft = {
   turnId: string;
   transcript: string;
+  transcriptEdited?: boolean;
   durationSeconds: number;
   audioId?: string;
   audioStatus?: 'saving' | 'verified' | 'failed';

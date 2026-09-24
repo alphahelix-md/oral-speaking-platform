@@ -101,6 +101,11 @@ describe('original recording verification', () => {
     memoryDatabase();
     await expect(saveOriginalAudio('raw', new Blob([]), metadata)).rejects.toThrow('EMPTY_AUDIO');
   });
+  it('detects changed MIME metadata even when stored bytes are unchanged', async () => {
+    const { records } = memoryDatabase(); await saveOriginalAudio('raw', original(), metadata);
+    const value: any = records.get('raw'); records.set('raw', { ...value, blob: new Blob(['rawdata'], { type: 'audio/mp4' }) });
+    await expect(getVerifiedAudio('raw')).rejects.toThrow('AUDIO_READBACK_MISMATCH');
+  });
   it('detects bytes corrupted after an earlier successful save', async () => {
     const { records } = memoryDatabase(); await saveOriginalAudio('raw', original(), metadata);
     const value: any = records.get('raw'); records.set('raw', { ...value, blob: new Blob(['corrupt']) });

@@ -31,6 +31,14 @@ describe('speech provider', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('https://open.bigmodel.cn/api/paas/v4/audio/transcriptions');
     expect(fetchMock.mock.calls[0][1].body.get('model')).toBe('glm-asr-2512');
   });
+  it('runs both GLM language attempts through the provider request budget', async () => {
+    vi.stubEnv('GLM_API_KEY', 'test-key');
+    const requestFetch = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => ({ text: '这是中文' }) }).mockResolvedValueOnce({ ok: true, json: async () => ({ text: 'This is English.' }) });
+    const unrelatedFetch = vi.fn(); vi.stubGlobal('fetch', unrelatedFetch);
+    const result = await new GlmSpeechProvider().transcribe(new File(['wav'], 'answer.wav', { type: 'audio/wav' }), 'en', 'sp_stable_1', requestFetch);
+    expect(result.text).toBe('This is English.'); expect(requestFetch).toHaveBeenCalledTimes(2); expect(unrelatedFetch).not.toHaveBeenCalled();
+    expect(requestFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+  });
   it('rejects unsupported GLM audio before spending API quota', async () => {
     vi.stubEnv('GLM_API_KEY', 'test-key');
     const fetchMock = vi.fn();

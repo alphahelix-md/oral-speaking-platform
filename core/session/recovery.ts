@@ -1,6 +1,8 @@
 import type { AnswerDraft, Session } from '@/types/speaking';
 import { createDraft, speakingReducer } from '@/core/speaking/engine';
 
+export class RequestNotSentError extends Error {}
+
 export function recoverSession(session: Session): Session {
   if (session.evaluation || session.revision !== undefined && !session.draft) return session;
   const draft = session.draft || createDraft();
@@ -16,7 +18,12 @@ export function commitDraft(session: Session, nextQuestion?: string): Session {
   if (!draft || session.turns.some(turn => turn.id === draft.turnId)) return session;
   if (draft.audioId && draft.audioStatus !== 'verified') throw new Error('AUDIO_NOT_VERIFIED');
   if (!draft.transcript.trim() && !draft.audioId) throw new Error('EMPTY_ANSWER');
-  const answered = speakingReducer(session, { type: 'ANSWER', ...draft, transcript: draft.transcript.trim() });
+  const reduced = speakingReducer(session, { type: 'ANSWER', ...draft, transcript: draft.transcript.trim() });
+  const answered: Session = { ...reduced, turns: reduced.turns.map(turn => turn.id !== draft.turnId ? turn : { ...turn,
+    audioStatus: draft.audioId ? 'verified' : 'none',
+    transcriptionStatus: !draft.transcript.trim() ? 'skipped' : draft.transcriptEdited || !draft.audioId ? 'manual' : draft.transcriptResult ? 'succeeded' : 'partial',
+    transcriptionChunks: draft.chunks.map(chunk => ({ ...chunk })),
+  }) };
   return nextQuestion === undefined ? answered : speakingReducer(answered, { type: 'QUESTION', question: nextQuestion });
 }
 
@@ -42,12 +49,13 @@ export async function transcribeDraft(
     let text: string;
     try { text = await request(chunk, index); }
     catch (error) {
-      states[index] = { status: 'uncertain' };
+      if (error instanceof RequestNotSentError) states.splice(index);
+      else states[index] = { status: 'uncertain' };
       checkpoint({ chunks: states, stage: 'interrupted' });
       throw error;
     }
     states[index] = { status: 'succeeded', text };
-    checkpoint({ chunks: states, transcript: states.map(part => part.text || '').join(' ').trim() });
+    checkpoint({ chunks: states, ...(!read().transcriptEdited ? { transcript: states.map(part => part.text || '').join(' ').trim() } : {}) });
   }
   const text = read().chunks.map(part => part.text || '').join(' ').trim();
   if (!text) throw new Error('EMPTY_TRANSCRIPT');

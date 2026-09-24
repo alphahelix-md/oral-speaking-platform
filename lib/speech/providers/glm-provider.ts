@@ -7,7 +7,7 @@ import { matchesTranscriptionLanguage, transcriptionLanguagePrompt } from '../la
 export class GlmSpeechProvider implements SpeechProvider {
   readonly id = 'glm';
 
-  async transcribe(audio: File, language: LanguageId, requestId?: string): Promise<TranscriptResult> {
+  async transcribe(audio: File, language: LanguageId, requestId?: string, requestFetch: typeof fetch = fetch): Promise<TranscriptResult> {
     const key = process.env.GLM_API_KEY;
     if (!key) throw new Error('GLM_NOT_CONFIGURED');
     if (!/audio\/(wav|wave|x-wav|mpeg|mp3)/.test(audio.type) && !/\.(wav|mp3)$/i.test(audio.name)) throw new Error('GLM_AUDIO_FORMAT_UNSUPPORTED');
@@ -19,11 +19,11 @@ export class GlmSpeechProvider implements SpeechProvider {
       form.append('prompt', transcriptionLanguagePrompt(language, attempt > 0));
       if (requestId) form.append('request_id', `${requestId}-${attempt}`.slice(0, 64));
       console.info('[TRANSCRIBE_PROVIDER] request', { requestId, provider: this.id, model: process.env.GLM_TRANSCRIBE_MODEL || 'glm-asr-2512', language, attempt: attempt + 1, fileSize: audio.size, mimeType: audio.type });
-      const response = await fetch('https://open.bigmodel.cn/api/paas/v4/audio/transcriptions', {
+      const response = await requestFetch('https://open.bigmodel.cn/api/paas/v4/audio/transcriptions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${key}` },
         body: form,
-        cache: 'no-store',
+        cache: 'no-store', signal: AbortSignal.timeout(20_000),
       });
       if (!response.ok) {
         console.error('[TRANSCRIBE_PROVIDER] error', { requestId, provider: this.id, status: response.status, providerRequestId: response.headers.get('x-request-id') || undefined });

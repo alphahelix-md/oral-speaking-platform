@@ -4,6 +4,8 @@ const STORE_NAME = 'records';
 export type AudioMetadata = {
   kind?: 'original' | 'derived';
   sha256?: string;
+  originalByteLength?: number;
+  originalMimeType?: string;
   createdAt: string;
   language?: 'en' | 'ja';
   mode?: string;
@@ -59,7 +61,7 @@ async function digest(audio: Blob): Promise<string> {
 export async function saveOriginalAudio(id: string, audio: Blob, metadata: Omit<AudioMetadata, 'trainingConsent'>): Promise<void> {
   if (!audio.size) throw new Error('EMPTY_AUDIO');
   const sha256 = await digest(audio);
-  await saveAudio(id, audio, { ...metadata, kind: 'original', sha256 });
+  await saveAudio(id, audio, { ...metadata, kind: 'original', sha256, originalByteLength: audio.size, originalMimeType: audio.type });
   const stored = await getAudio(id);
   if (!stored || stored.size !== audio.size || stored.type !== audio.type || await digest(stored) !== sha256) {
     throw new Error('AUDIO_READBACK_MISMATCH');
@@ -68,7 +70,10 @@ export async function saveOriginalAudio(id: string, audio: Blob, metadata: Omit<
 
 export async function getVerifiedAudio(id: string): Promise<Blob> {
   const entry = await getAudioEntry(id);
-  if (!entry?.blob.size || !entry.metadata?.sha256 || await digest(entry.blob) !== entry.metadata.sha256) {
+  if (!entry?.blob.size || !entry.metadata?.sha256
+    || entry.metadata.originalByteLength !== undefined && entry.blob.size !== entry.metadata.originalByteLength
+    || entry.metadata.originalMimeType !== undefined && entry.blob.type !== entry.metadata.originalMimeType
+    || await digest(entry.blob) !== entry.metadata.sha256) {
     throw new Error('AUDIO_READBACK_MISMATCH');
   }
   return entry.blob;

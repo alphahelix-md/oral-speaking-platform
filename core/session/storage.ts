@@ -14,7 +14,7 @@ export function saveSession(session: Session): Session {
 }
 function readSessions(): Session[] {
   const value = JSON.parse(localStorage.getItem(KEY) || '[]');
-  if (!Array.isArray(value)) throw new Error('SESSION_STORAGE_INVALID');
+  if (!Array.isArray(value) || value.some(item => !item || typeof item.id !== 'string' || typeof item.question !== 'string' || !['en', 'ja'].includes(item.language) || !Array.isArray(item.turns))) throw new Error('SESSION_STORAGE_INVALID');
   return value as Session[];
 }
 export function deleteSessions(ids: string[]): void {
