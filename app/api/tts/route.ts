@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import { z } from 'zod';
 import { guardBetaAccess, guardErrorResponse } from '@/lib/ai/guard';
+import { TTS_DEADLINE_MS } from '@/lib/ai/request-policy';
+import { withDeadline } from '@/lib/http/deadline';
 
 export const runtime = 'nodejs';
 export const maxDuration = 20;
@@ -23,42 +25,49 @@ function voiceFor(input: z.infer<typeof requestSchema>) {
   return { name: 'en-US-AriaNeural', rate: '-5%' };
 }
 
-async function synthesize(input: z.infer<typeof requestSchema>) {
+async function synthesize(input: z.infer<typeof requestSchema>, signal: AbortSignal) {
+  signal.throwIfAborted();
   const tts = new MsEdgeTTS();
   const voice = voiceFor(input);
-  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let audioStream: ReturnType<MsEdgeTTS['toStream']>['audioStream'] | undefined;
+  const close = () => { audioStream?.destroy(); tts.close(); };
+  signal.addEventListener('abort', close, { once: true });
   try {
-    const work = (async () => {
-      await tts.setMetadata(voice.name, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-      const { audioStream } = tts.toStream(escapeXml(input.text), { rate: voice.rate, pitch: '+0Hz', volume: '+0%' });
-      const chunks: Buffer[] = [];
-      for await (const chunk of audioStream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      const audio = Buffer.concat(chunks);
-      if (!audio.length) throw new Error('TTS_EMPTY_AUDIO');
-      return audio;
-    })();
-    const deadline = new Promise<never>((_, reject) => {
-      timeout = setTimeout(() => reject(new Error('TTS_TIMEOUT')), 15_000);
-    });
-    return await Promise.race([work, deadline]);
+    await tts.setMetadata(voice.name, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    signal.throwIfAborted();
+    audioStream = tts.toStream(escapeXml(input.text), { rate: voice.rate, pitch: '+0Hz', volume: '+0%' }).audioStream;
+    const chunks: Buffer[] = [];
+    for await (const chunk of audioStream) {
+      signal.throwIfAborted();
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    signal.throwIfAborted();
+    const audio = Buffer.concat(chunks);
+    if (!audio.length) throw new Error('TTS_EMPTY_AUDIO');
+    return audio;
   } finally {
-    if (timeout) clearTimeout(timeout);
-    tts.close();
+    signal.removeEventListener('abort', close);
+    // Metadata may finish after cancellation; close any connection it opened late.
+    close();
   }
 }
 
 export async function POST(request: Request) {
   try {
-    await guardBetaAccess(request);
-    const input = requestSchema.parse(await request.json());
-    const audio = await synthesize(input);
-    return new Response(new Uint8Array(audio), {
-      headers: {
-        'Content-Type': 'audio/mpeg',
-        'Cache-Control': 'private, max-age=604800',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    });
+    return await withDeadline(TTS_DEADLINE_MS, async signal => {
+      await guardBetaAccess(request);
+      signal.throwIfAborted();
+      const input = requestSchema.parse(await request.json());
+      signal.throwIfAborted();
+      const audio = await synthesize(input, signal);
+      return new Response(new Uint8Array(audio), {
+        headers: {
+          'Content-Type': 'audio/mpeg',
+          'Cache-Control': 'private, max-age=604800',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }, request.signal);
   } catch (error) {
     const guard = guardErrorResponse(error);
     if (guard) return NextResponse.json({ error: guard.error }, { status: guard.status });

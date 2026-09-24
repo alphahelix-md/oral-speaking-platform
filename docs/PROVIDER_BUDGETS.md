@@ -26,6 +26,8 @@ The shared maximum is two actual provider attempts, including any future approve
 
 Evaluation has a 21-second server deadline starting before authentication/body parsing, with at most 10 seconds per attempt. Transcription has a 45-second overall server deadline. Budget reads/reservations and provider requests share cancellation; late auth or reservation responses cannot start a provider request. Client deadlines are 25 seconds for evaluation and 60 seconds for transcription, including auth headers and response bodies. A client timeout remains an unknown result; it is not proof that a provider did not bill.
 
+Question TTS has a separate 15-second total server deadline covering authentication, body parsing, connection setup and complete audio collection. Client cancellation closes its connection/stream; late setup cannot start synthesis and partial audio is not returned as success. Its voices, private cache and existing access guard are unchanged. TTS is not covered by the paid STT/evaluation budget. See [the service audit](qa/BUDGET_SERVICE_AUDIT.md) for isolated test evidence and unresolved live-budget checks.
+
 The reservation is committed before the provider call. Final ledger updates are optional, bounded best-effort updates outside the response path: a stalled final write must never discard received output or cause another paid retry. Process termination can leave a `reserved` receipt without a final marker; reconciliation remains required and no refund is inferred.
 
 ## Manual configuration still required
