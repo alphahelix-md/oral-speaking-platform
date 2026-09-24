@@ -25,11 +25,17 @@ This checklist is not a pass report. Automated tests cannot supply phone/device 
 | Received transcript write failure | Return a successful STT chunk, then fail local storage before the response checkpoint | Received text remains editable/exportable in memory, failure stays visible, no next chunk is requested; saving can be retried | Production-handler fault tests pass; real-device quota scenario pending |
 | Server budgets | Dedicated Redis test backend; mock Provider | Atomic concurrent limits; duplicate rejected; each retry counted; failure stops paid work | Mock concurrency/limits and new hashed Session correlation tests pass; real Redis, production hard cap and invoice reconciliation pending |
 
-Deployment evidence on 2026-09-24: the user reported deploying e46edcf, and all seven public frontend scripts matched the local production build by SHA256. Backend commit/configuration were not independently verified. Later documentation-only commits do not require a new application deployment.
+Latest deployment evidence on 2026-09-24: the user reported deploying bf7feac. All seven public frontend scripts matched the local production build by SHA256, and the complete application CSS matched exactly; generated Tailwind utility rules and supporting defaults differ in the full CSS file. Backend commit/configuration were not independently verified. Documentation-only follow-up commits do not require a new application deployment.
 
 Device adaptation now precedes further device acceptance at the user’s request. See [DEVICE_ADAPTATION.md](DEVICE_ADAPTATION.md): responsive desktop/mobile layouts, keyboard-aware dialogs, and 12 Chromium configurations / 168 page-state checks. These are isolated layout checks, not physical iPhone/Safari or desktop-microphone acceptance. The user skipped microphone-denial/manual-text testing; do not mark it passed.
 
-Run the mobile rows on Android Chrome, iPhone Safari and desktop Chrome. Start with English. Mark Japanese separately until real language samples are available.
+Latest manual feedback: the user confirmed the interface, then reported failed desktop English transcription despite speaking English and hearing clear playback. They later suspected microphone permission but could not confirm the cause. At their explicit request, desktop STT is deferred for this stage, **not passed**; see [QA-001](QA_BACKLOG.md#qa-001电脑英语录音无法转写). No code fix has been made. The interface confirmation is not independent evidence that every iPhone rotation/keyboard case was exercised.
+
+The user has no iPhone and explicitly skipped physical iPhone/Safari testing for this stage; see [QA-002](QA_BACKLOG.md#qa-002iphone-safari-真机验收无设备). This is unavailable hardware, not a passed compatibility result.
+
+Next independent manual case: use the existing vivo X100s Pro / Chrome for an English pause/resume recording. Speak about 10 seconds, pause for 5 seconds, resume and speak about 10 more seconds, then stop. Both spoken parts must play completely and in order; the pause must not count as recorded speech time. Check that transcription covers both parts. Submit once, finish and reopen from Progress after refresh; text and complete audio must remain. This manual case is pending.
+
+Target coverage remains Android Chrome, iPhone Safari and desktop Chrome, subject to the explicit deferrals above. Start with English. Mark Japanese separately until real language samples are available.
 
 Per attempt, record: date, build SHA, device/browser, language, session identifier (or anonymized alias), duration, number of submitted answers, whether original playback succeeds after refresh, transcript/manual/skip status, provider attempts/chunks/retries, failure code, export-only outcome and actual account charge if available. Do not put access codes, tokens, raw private text or audio in public logs.
 
