@@ -31,8 +31,8 @@ export async function POST(request: Request) {
     action = input.action;
     provider = resolveTextProvider();
     console.info('[AI_REQUEST]', { action, provider });
-    const result = await runCapability('content_evaluation', { primary: provider }, selected =>
-      transcriptTextEvaluator.evaluate(selected, input.language, input.mode, input.turns, input.uiLanguage));
+    const result = await runCapability('content_evaluation', { primary: provider }, (selected, timeoutMs) =>
+      transcriptTextEvaluator.evaluate(selected, input.language, input.mode, input.turns, input.uiLanguage, timeoutMs));
     provider = result.provider;
     const evaluation = result.value;
     console.info('[AI_SUCCESS]', { action, provider, durationMs: Date.now() - startedAt });
