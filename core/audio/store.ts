@@ -44,6 +44,7 @@ export async function saveAudio(id: string, audio: Blob, metadata?: Omit<AudioMe
       tx.objectStore(STORE_NAME).put(value, id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('AUDIO_TRANSACTION_ABORTED'));
     });
   } finally { db.close(); }
 }
@@ -91,6 +92,7 @@ export async function updateAudioMetadata(id: string, changes: Partial<AudioMeta
       };
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('AUDIO_TRANSACTION_ABORTED'));
     });
   } finally { db.close(); }
 }
@@ -103,6 +105,7 @@ export async function deleteAudio(id: string): Promise<void> {
       tx.objectStore(STORE_NAME).delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('AUDIO_TRANSACTION_ABORTED'));
     });
   } finally { db.close(); }
 }
@@ -117,6 +120,7 @@ export async function deleteAudioMany(ids: string[]): Promise<void> {
       for (const id of new Set(ids)) store.delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('AUDIO_TRANSACTION_ABORTED'));
     });
   } finally { db.close(); }
 }

@@ -122,6 +122,7 @@ export function OralApp() {
   const [authOpen, setAuthOpen] = useState(false); const [authUser, setAuthUser] = useState<User | null>(null); const [authEmail, setAuthEmail] = useState(''); const [authBusy, setAuthBusy] = useState(false); const [authNotice, setAuthNotice] = useState('');
   const [trainingConsent, setTrainingConsent] = useState<TrainingConsent>('unset'); const [consentOpen, setConsentOpen] = useState(false); const [consentBusy, setConsentBusy] = useState(false);
   const [questionAudioState, setQuestionAudioState] = useState<'idle' | 'loading' | 'ready' | 'fallback'>('idle');
+  const [sessionSaveFailed, setSessionSaveFailed] = useState(false);
   const [quickFeedbackTurnId, setQuickFeedbackTurnId] = useState<string | null>(null);
   const recorder = useRef<AudioRecorder | null>(null); const browserTranscriber = useRef<BrowserTranscriber | null>(null); const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingLock = useRef(false); const stopLock = useRef(false); const analysisLock = useRef(false); const submitLock = useRef(false); const evaluationLock = useRef(false);
@@ -152,7 +153,17 @@ export function OralApp() {
     const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => applyUser(session?.user || null));
     return () => subscription.unsubscribe();
   }, []);
-  useEffect(() => { if (session) { saveSession(session); setSessions(getSessions()); } }, [session]);
+  useEffect(() => {
+    if (!session) return;
+    try { saveSession(session); setSessions(getSessions()); setSessionSaveFailed(false); }
+    catch { setSessionSaveFailed(true); }
+  }, [session]);
+  useEffect(() => {
+    if (!recording && !audio && !transcript.trim() && !sessionSaveFailed) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [recording, audio, transcript, sessionSaveFailed]);
   useEffect(() => { return () => { if (timer.current) clearInterval(timer.current); recorder.current?.dispose(); playingQuestionAudio.current?.pause(); if (playingQuestionAudioUrl.current) URL.revokeObjectURL(playingQuestionAudioUrl.current); }; }, []);
   useEffect(() => { if (page !== 'speaking' && recorder.current?.state !== 'inactive') { recorder.current?.dispose(); if (timer.current) clearInterval(timer.current); setRecording(false); setPaused(false); } }, [page]);
   useEffect(() => { if (!audio) { setAudioUrl(''); return; } const url = URL.createObjectURL(audio); setAudioUrl(url); return () => URL.revokeObjectURL(url); }, [audio]);
@@ -506,6 +517,9 @@ export function OralApp() {
           setNotice(`${consentCopy[uiLanguage].uploadFailed} [${code}]`);
         });
       }
+      try { saveSession(updated); }
+      catch (error) { setSessionSaveFailed(true); throw error; }
+      setSessionSaveFailed(false);
       setSession(updated);
       setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setPendingAudioId(null); setAudioSaveFailed(false);
       setTranscript('');
@@ -543,7 +557,10 @@ export function OralApp() {
         }
       }
       const done = speakingReducer(current, { type: 'EVALUATE', evaluation });
-      setSession(done); saveSession(done); navigate('result');
+      setSession(done);
+      try { saveSession(done); setSessionSaveFailed(false); }
+      catch { setSessionSaveFailed(true); }
+      navigate('result');
     } finally {
       setBusy(false); setProcessingStage(''); evaluationLock.current = false;
     }
@@ -573,6 +590,11 @@ export function OralApp() {
 
   return <div className={'app-shell ' + (questionBlurred ? 'questions-blurred' : '')}><div className="app-frame">
     {page !== 'speaking' && page !== 'result' && <header className="topbar"><div className="brand"><span className="brand-mark"><AudioLines size={20} strokeWidth={2.5} /></span><span>oral<span className="brand-dot">.</span></span></div><div className="topbar-tools"><span className="topbar-caption">{text.studio}</span></div></header>}
+    {sessionSaveFailed && <div className="notice" role="alert">{extra.saveFailed} <button onClick={() => {
+      if (!session) return;
+      try { saveSession(session); setSessions(getSessions()); setSessionSaveFailed(false); }
+      catch { setSessionSaveFailed(true); }
+    }}>{uiLanguage === 'en' ? 'Retry save' : uiLanguage === 'ja' ? '保存を再試行' : uiLanguage === 'zh-HK' ? '重試儲存' : '重试保存'}</button></div>}
     {authOpen && <div className="settings-backdrop" role="presentation" onClick={() => setAuthOpen(false)}><section className="auth-sheet" role="dialog" aria-modal="true" aria-label={authCopy[uiLanguage].signIn} onClick={event => event.stopPropagation()}><button className="settings-close auth-close" aria-label={text.close} onClick={() => setAuthOpen(false)}><X size={19} /></button>{authUser ? <><span className="section-kicker">ORAL ACCOUNT</span><h2>{authUser.email}</h2><p>{authCopy[uiLanguage].inviteOnly}</p><button className="primary-button" onClick={signOut}>{authCopy[uiLanguage].signOut} <LogOut size={19} /></button></> : <><span className="section-kicker">ORAL ACCOUNT</span><h2>{authCopy[uiLanguage].signIn}</h2><p>{authCopy[uiLanguage].inviteOnly}</p><label className="access-code-label" htmlFor="auth-email">{authCopy[uiLanguage].email}</label><input id="auth-email" className="access-code-input" type="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" /><button className="primary-button" disabled={authBusy || !authEmail.trim()} onClick={sendSignInLink}>{authBusy ? extra.processing : authCopy[uiLanguage].sendLink} <Mail size={19} /></button>{authNotice && <p className="auth-notice">{authNotice}</p>}</>}</section></div>}
     {consentOpen && <div className="settings-backdrop" role="presentation"><section className="auth-sheet consent-sheet" role="dialog" aria-modal="true" aria-label={consentCopy[uiLanguage].title}><button className="settings-close auth-close" aria-label={text.close} onClick={() => setConsentOpen(false)}><X size={19} /></button><span className="section-kicker">PRIVACY</span><h2>{consentCopy[uiLanguage].title}</h2><p>{consentCopy[uiLanguage].body}</p><div className="consent-options"><button disabled={consentBusy} onClick={() => saveTrainingConsent('local_only', page === 'speaking')}><strong>{consentCopy[uiLanguage].local}</strong><small>{consentCopy[uiLanguage].localHint}</small></button><button disabled={consentBusy} onClick={() => saveTrainingConsent('training', page === 'speaking')}><strong>{consentCopy[uiLanguage].training}</strong><small>{consentCopy[uiLanguage].trainingHint}</small></button></div></section></div>}
     {settingsOpen && <div className="settings-backdrop" role="presentation" onClick={closeSettings}>
