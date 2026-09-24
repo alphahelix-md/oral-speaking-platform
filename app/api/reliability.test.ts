@@ -15,7 +15,7 @@ beforeEach(() => {
   mocks.operation.mockReturnValue({ run: mocks.run });
   vi.spyOn(console, 'info').mockImplementation(() => {}); vi.spyOn(console, 'error').mockImplementation(() => {});
 });
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 function wave() {
   const bytes = new ArrayBuffer(32044); const view = new DataView(bytes);
   const tag = (at: number, value: string) => [...value].forEach((char, i) => view.setUint8(at + i, char.charCodeAt(0)));
@@ -77,5 +77,68 @@ describe('route budget and free-fallback responses', () => {
     mocks.operation.mockImplementation(() => { throw new BudgetError('BUDGET_NOT_CONFIGURED'); });
     const response = await evaluate(evaluationRequest());
     expect(response.status).toBe(503); expect(mocks.evaluate).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('route deadline propagation', () => {
+  it('passes the same attempt cancellation through budget and evaluation', async () => {
+    mocks.evaluate.mockResolvedValueOnce({ model: 'ai', scores: [] });
+    const response = await evaluate(evaluationRequest());
+    expect(response.status).toBe(200);
+    const budgetSignal = mocks.run.mock.calls[0][3];
+    expect(budgetSignal).toBeInstanceOf(AbortSignal);
+    expect(mocks.evaluate.mock.calls[0][6]).toBe(budgetSignal);
+  });
+  it('returns a bounded error after two stuck evaluation attempts', async () => {
+    vi.useFakeTimers();
+    mocks.evaluate.mockImplementation(() => new Promise(() => {}));
+    const pending = evaluate(evaluationRequest());
+    await vi.advanceTimersByTimeAsync(21_000);
+    const response = await pending;
+    expect(response.status).toBe(502); expect(mocks.evaluate).toHaveBeenCalledTimes(2);
+    expect(mocks.evaluate.mock.calls.every(call => call[6].aborted)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('cancels transcription budget and network when the complete body stalls', async () => {
+    vi.useFakeTimers();
+    let providerSignal!: AbortSignal;
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      providerSignal = init.signal;
+      return { ok: true, json: () => new Promise(() => {}) };
+    }));
+    mocks.transcribe.mockImplementation(async (_audio, _language, _id, requestFetch) => {
+      const response = await requestFetch('https://fixture.invalid'); return response.json();
+    });
+    // Resolve multipart parsing before starting the fake operation clock.
+    const request = speechRequest(); const form = await request.formData();
+    vi.spyOn(request, 'formData').mockResolvedValue(form);
+    const pending = transcribe(request);
+    await vi.advanceTimersByTimeAsync(46_000);
+    const response = await pending;
+    expect(response.status).toBe(502); expect(providerSignal.aborted).toBe(true);
+    expect(mocks.run.mock.calls[0][3].aborted).toBe(true);
+    expect(mocks.transcribe).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+
+describe('late authentication cannot start billable work', () => {
+  it.each([['evaluation', 21_000], ['transcription', 45_000]] as const)('bounds %s before provider routing begins', async (kind, timeout) => {
+    vi.useFakeTimers();
+    let release!: (account: string) => void;
+    mocks.access.mockImplementation(() => new Promise<string>(resolve => { release = resolve; }));
+    const pending = kind === 'evaluation' ? evaluate(evaluationRequest()) : transcribe(speechRequest());
+    await vi.advanceTimersByTimeAsync(timeout);
+    expect((await pending).status).toBe(502);
+    release('account'); await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.operation).not.toHaveBeenCalled(); expect(mocks.evaluate).not.toHaveBeenCalled(); expect(mocks.transcribe).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not authenticate or call models for an already aborted client request', async () => {
+    const request = evaluationRequest();
+    const aborted = new Request(request, { signal: AbortSignal.abort(new DOMException('Cancelled', 'AbortError')) });
+    expect((await evaluate(aborted)).status).toBe(502);
+    expect(mocks.access).not.toHaveBeenCalled(); expect(mocks.operation).not.toHaveBeenCalled();
   });
 });

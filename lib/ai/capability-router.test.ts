@@ -1,17 +1,19 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { UpstreamAiError } from './server';
 import { runCapability } from './capability-router';
 
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
 describe('capability routing', () => {
-  it('retries transient primary failure then switches only this capability', async () => {
+  it('reserves the second and last attempt for the configured fallback', async () => {
     const invoke = vi.fn(async (provider: 'deepseek' | 'glm') => {
       if (provider === 'glm') return 'fallback review';
       if (invoke.mock.calls.length === 1) throw new TypeError('network');
       throw new UpstreamAiError(503);
     });
     const result = await runCapability('content_evaluation', { primary: 'deepseek', fallback: 'glm' }, invoke);
-    expect(result).toEqual({ value: 'fallback review', provider: 'glm', attempts: 3 });
-    expect(invoke.mock.calls.map(([provider]) => provider)).toEqual(['deepseek', 'deepseek', 'glm']);
+    expect(result).toEqual({ value: 'fallback review', provider: 'glm', attempts: 2 });
+    expect(invoke.mock.calls.map(([provider]) => provider)).toEqual(['deepseek', 'glm']);
   });
 
   it('does not bypass provider 429, which may mean account quota', async () => {
@@ -26,10 +28,10 @@ describe('capability routing', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it('tries configured fallback after repeated malformed output', async () => {
+  it('uses the last attempt for fallback after malformed output', async () => {
     const invoke = vi.fn(async (_provider: 'deepseek' | 'glm') => { throw new SyntaxError('bad json'); });
     await expect(runCapability('content_evaluation', { primary: 'deepseek', fallback: 'glm' }, invoke)).rejects.toBeInstanceOf(SyntaxError);
-    expect(invoke.mock.calls.map(([provider]) => provider)).toEqual(['deepseek', 'deepseek', 'glm']);
+    expect(invoke.mock.calls.map(([provider]) => provider)).toEqual(['deepseek', 'glm']);
   });
 
   it('keeps fallback inactive when not configured', async () => {
@@ -57,14 +59,14 @@ describe('capacity and deadline boundaries', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
-  it('reserves time for all three attempts', async () => {
+  it('caps the combined primary and fallback attempts at two', async () => {
     const invoke = vi.fn(async (provider: string, timeoutMs: number) => {
-      expect(timeoutMs).toBe(7000);
+      expect(timeoutMs).toBe(10000);
       if (provider === 'deepseek') throw new UpstreamAiError(503);
       return 'ok';
     });
     await runCapability('content_evaluation', { primary: 'deepseek', fallback: 'glm' }, invoke);
-    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 
   it('stops before starting another request after the total budget expires', async () => {
@@ -83,6 +85,31 @@ describe('capacity and deadline boundaries', () => {
     const invoke = vi.fn(async () => { throw new UpstreamAiError(503); });
     await expect(runCapability('content_evaluation', { primary: 'glm', fallback: 'glm' }, invoke)).rejects.toMatchObject({ status: 503 });
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(invoke.mock.calls[0]).toEqual(['glm', 10000]);
+    expect(invoke.mock.calls[0]).toEqual(['glm', 10000, expect.any(AbortSignal)]);
+  });
+});
+
+
+describe('enforced operation deadlines', () => {
+  it('aborts stuck calls and never starts a third attempt when an adapter ignores abort', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const invoke = vi.fn((_provider: string, _timeout: number, signal: AbortSignal) => {
+      signals.push(signal); return new Promise<string>(() => {});
+    });
+    const result = runCapability('content_evaluation', { primary: 'deepseek' }, invoke);
+    const rejected = expect(result).rejects.toMatchObject({ name: 'TimeoutError' });
+    await vi.advanceTimersByTimeAsync(21_000); await rejected;
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('shares a decreasing overall deadline when time is spent outside the provider', async () => {
+    let clock = 0; vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const invoke = vi.fn(async (_provider: string, timeout: number) => {
+      if (invoke.mock.calls.length === 1) { clock = 19_000; throw new TypeError('network'); }
+      expect(timeout).toBe(2000); return 'ok';
+    });
+    expect((await runCapability('content_evaluation', { primary: 'deepseek' }, invoke)).attempts).toBe(2);
   });
 });

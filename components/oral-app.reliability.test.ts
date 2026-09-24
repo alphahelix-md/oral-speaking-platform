@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSession, speakingReducer } from '@/core/speaking/engine';
-import { commitDraft, evaluationKey } from '@/core/session/recovery';
+import { commitDraft, evaluationKey, RequestNotSentError, transcribeDraft } from '@/core/session/recovery';
 import { getSessions, saveSession } from '@/core/session/storage';
+import { fetchJsonWithTimeout } from '@/lib/http/fetch-json';
 import { unavailableEvaluation } from '@/lib/ai/unavailable-review';
 import type { Session } from '@/types/speaking';
 
@@ -25,7 +26,7 @@ beforeEach(() => {
   storage = { getItem: vi.fn((key: string) => values.get(key) || null), setItem: vi.fn((key: string, value: string) => values.set(key, value)) };
   vi.stubGlobal('localStorage', storage);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 function context(initial?: Session) {
   const session = initial || createSession('en', 'daily', 'Intermediate', 'Food', 'Question');
   const ref = { current: session };
@@ -42,7 +43,7 @@ function context(initial?: Session) {
     updateAudioMetadata: vi.fn().mockResolvedValue(undefined), normalizeRecordedAudio: vi.fn().mockResolvedValue(new Blob(['derived'])),
     analyzeAudio: vi.fn().mockResolvedValue(undefined), matchesTranscriptionLanguage: () => true,
     finishSession: vi.fn().mockResolvedValue(undefined), navigate: vi.fn(),
-    getSupabaseAuthHeaders: vi.fn().mockResolvedValue({}), fetchWithTimeout: vi.fn(),
+    getSupabaseAuthHeaders: vi.fn().mockResolvedValue({}), fetchJsonWithTimeout: vi.fn(),
     unavailableEvaluation, unavailableReviewCopy: { en: { notice: 'No score' } },
   };
   for (const key of ['busy','notice','sessionSaveFailed','audioSaveFailed','audio','audioMetrics','transcriptResult','pendingAudioId','transcript','seconds','retryExamPart','quickFeedbackTurnId','recording','paused','processingStage','speechDiagnostic']) {
@@ -137,30 +138,30 @@ describe('production evaluation handler', () => {
   }
   it('persists request claim before fetch and prevents repetition after refresh', async () => {
     const c = answered();
-    c.env.fetchWithTimeout.mockImplementation(async () => {
+    c.env.fetchJsonWithTimeout.mockImplementation(async () => {
       expect(getSessions()[0].evaluationRun?.status).toBe('running');
       throw new Error('Network lost');
     });
-    await handler('finishSession', c.env)(); expect(c.env.fetchWithTimeout).toHaveBeenCalledOnce();
+    await handler('finishSession', c.env)(); expect(c.env.fetchJsonWithTimeout).toHaveBeenCalledOnce();
     const restored = context(getSessions()[0]);
-    await handler('finishSession', restored.env)(); expect(restored.env.fetchWithTimeout).not.toHaveBeenCalled();
+    await handler('finishSession', restored.env)(); expect(restored.env.fetchJsonWithTimeout).not.toHaveBeenCalled();
     expect(restored.env.navigate).toHaveBeenCalledWith('result');
   });
   it('finishes an interrupted evaluation without another request', async () => {
     const c = answered(); c.env.persistSession({ ...c.ref.current, evaluationRun: { key: evaluationKey(c.ref.current), status: 'running' } }); c.env.session = c.ref.current;
     await handler('finishSession', c.env)();
-    expect(c.env.fetchWithTimeout).not.toHaveBeenCalled(); expect(getSessions()[0].evaluation?.model).toBe('unavailable');
+    expect(c.env.fetchJsonWithTimeout).not.toHaveBeenCalled(); expect(getSessions()[0].evaluation?.model).toBe('unavailable');
   });
   it('never evaluates while unsubmitted text remains', async () => {
     const c = context(); c.ref.current.draft!.transcript = 'Pending answer';
     await handler('finishSession', c.env)();
-    expect(c.env.fetchWithTimeout).not.toHaveBeenCalled(); expect(c.env.navigate).not.toHaveBeenCalled();
+    expect(c.env.fetchJsonWithTimeout).not.toHaveBeenCalled(); expect(c.env.navigate).not.toHaveBeenCalled();
     expect(c.ref.current.draft?.transcript).toBe('Pending answer');
   });
   it('does not call evaluation when the durable claim cannot be stored', async () => {
     const c = answered(); storage.setItem.mockImplementation(() => { throw new Error('Full'); });
     await handler('finishSession', c.env)();
-    expect(c.env.fetchWithTimeout).not.toHaveBeenCalled(); expect(c.state.sessionSaveFailed).toBe(true);
+    expect(c.env.fetchJsonWithTimeout).not.toHaveBeenCalled(); expect(c.state.sessionSaveFailed).toBe(true);
   });
 });
 
@@ -171,5 +172,52 @@ describe('production record deletion handler', () => {
     c.env.deleteAudioMany = vi.fn(); c.env.deleteSessions = vi.fn();
     await expect(handler('learningRecordsDeleted', c.env)(['selected'])).rejects.toThrow('Corrupt history');
     expect(c.env.deleteAudioMany).not.toHaveBeenCalled(); expect(c.env.deleteSessions).not.toHaveBeenCalled();
+  });
+});
+
+describe('production handlers after incomplete network responses', () => {
+  it('restores manual input after a stuck STT body without resending an uncertain chunk', async () => {
+    vi.useFakeTimers();
+    const c = context(); c.ref.current.draft = { ...c.ref.current.draft!, audioId: 'raw', audioStatus: 'verified', transcript: 'Keep my text', transcriptEdited: true };
+    c.env.persistSession(c.ref.current);
+    Object.assign(c.env, {
+      fetchJsonWithTimeout, transcribeDraft, RequestNotSentError,
+      recordedAudioToWavChunks: vi.fn().mockResolvedValue([new File(['audio'], 'chunk.wav')]),
+      speechRequestCount: { current: 0 }, speechErrors: { en: { transcriptionFailed: 'Transcription failed' } }, recoveryText: { interrupted: 'Keep editing' },
+    });
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => new Promise(() => {}) }); vi.stubGlobal('fetch', fetcher);
+    const analyze = handler('analyzeAudio', c.env); const pending = analyze(new Blob(['original']), 4);
+    await vi.advanceTimersByTimeAsync(60_000); await pending;
+    expect(getSessions()[0].draft).toMatchObject({ audioId: 'raw', audioStatus: 'verified', transcript: 'Keep my text', stage: 'interrupted', chunks: [{ status: 'uncertain' }] });
+    expect(c.state.busy).toBe(false); expect(c.env.analysisLock.current).toBe(false);
+    await analyze(new Blob(['original']), 4); expect(fetcher).toHaveBeenCalledOnce();
+  });
+  it('saves a scoreless result after evaluation headers arrive but the body stalls', async () => {
+    vi.useFakeTimers(); const c = context(); c.ref.current.draft!.transcript = 'Answer';
+    c.env.persistSession(commitDraft(c.ref.current)); c.env.session = c.ref.current;
+    c.env.fetchJsonWithTimeout = fetchJsonWithTimeout;
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => new Promise(() => {}) }); vi.stubGlobal('fetch', fetcher);
+    const pending = handler('finishSession', c.env)(); await vi.advanceTimersByTimeAsync(25_000); await pending;
+    expect(getSessions()[0].evaluation?.model).toBe('unavailable'); expect(getSessions()[0].turns).toHaveLength(1);
+    expect(c.env.navigate).toHaveBeenCalledWith('result'); expect(c.state.busy).toBe(false); expect(c.env.evaluationLock.current).toBe(false);
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe('saved recording playback failures', () => {
+  it('shows an actionable notice instead of rejecting when IndexedDB is unavailable', async () => {
+    const notice = vi.fn();
+    await handler('playAudio', { getPlaybackAudio: vi.fn().mockRejectedValue(new Error('storage denied')), setNotice: notice, extra: { playback: 'Playback unavailable' } })('raw');
+    expect(notice).toHaveBeenCalledWith('Playback unavailable');
+  });
+  it('releases the object URL after playback permission rejection', async () => {
+    const revoke = vi.spyOn(URL, 'revokeObjectURL');
+    const notice = vi.fn();
+    vi.stubGlobal('Audio', class { play() { return Promise.reject(new Error('autoplay denied')); } });
+    try {
+      await handler('playAudio', { getPlaybackAudio: vi.fn().mockResolvedValue(new Blob(['raw'])), setNotice: notice, extra: { playback: 'Playback unavailable' } })('raw');
+      expect(revoke).toHaveBeenCalledOnce(); expect(notice).toHaveBeenCalledWith('Playback unavailable');
+    } finally { revoke.mockRestore(); }
   });
 });

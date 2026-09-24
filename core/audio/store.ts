@@ -1,3 +1,5 @@
+import type { TranscriptionChunk } from '@/types/speaking';
+
 const DB_NAME = 'oral-audio-v1';
 const STORE_NAME = 'records';
 
@@ -15,6 +17,7 @@ export type AudioMetadata = {
   turnId?: string;
   transcript?: string;
   transcriptionChunks?: string[];
+  transcriptionRecovery?: { requestId: string; chunks: TranscriptionChunk[] };
   trainingConsent: boolean;
   trainingStoragePath?: string;
   trainingUploadedAt?: string;
@@ -124,21 +127,31 @@ export async function listAudio(): Promise<AudioLibraryEntry[]> {
   } finally { db.close(); }
 }
 
-export async function updateAudioMetadata(id: string, changes: Partial<AudioMetadata>): Promise<void> {
+export async function updateAudioMetadata(
+  id: string,
+  changes: Partial<AudioMetadata> | ((current: AudioMetadata) => Partial<AudioMetadata>),
+): Promise<AudioMetadata> {
   const db = await openDB();
   try {
-    await new Promise<void>((resolve, reject) => {
+    return await new Promise<AudioMetadata>((resolve, reject) => {
+      // Read + conditional update share one write transaction, including across tabs.
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
       const request = store.get(id);
+      let saved: AudioMetadata | undefined;
+      let failure: unknown;
       request.onsuccess = () => {
-        if (!request.result) return;
-        const current = unpack(id, request.result as StoredAudio);
-        store.put({ blob: current.blob, metadata: { ...current.metadata, createdAt: current.metadata?.createdAt || new Date().toISOString(), trainingConsent: current.metadata?.trainingConsent || false, ...changes } }, id);
+        try {
+          if (!request.result) throw new Error('AUDIO_NOT_FOUND');
+          const current = unpack(id, request.result as StoredAudio);
+          const metadata: AudioMetadata = { createdAt: new Date().toISOString(), trainingConsent: false, ...current.metadata };
+          saved = { ...metadata, ...(typeof changes === 'function' ? changes(metadata) : changes) };
+          store.put({ blob: current.blob, metadata: saved }, id);
+        } catch (error) { failure = error; tx.abort(); }
       };
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error || new Error('AUDIO_TRANSACTION_ABORTED'));
+      tx.oncomplete = () => saved ? resolve(saved) : reject(new Error('AUDIO_NOT_FOUND'));
+      tx.onerror = () => reject(failure || tx.error);
+      tx.onabort = () => reject(failure || tx.error || new Error('AUDIO_TRANSACTION_ABORTED'));
     });
   } finally { db.close(); }
 }

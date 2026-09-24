@@ -51,7 +51,8 @@ function memoryDatabase(fault?: 'missing' | 'bytes' | 'mime' | 'write' | 'read-a
   const close = vi.fn();
   vi.stubGlobal('indexedDB', { open: () => {
     const open: any = { result: { close, transaction: (_name: string, mode?: string) => {
-      const tx: any = { error: null };
+      let aborted = false;
+      const tx: any = { error: null, abort: () => { aborted = true; queueMicrotask(() => tx.onabort?.()); } };
       let pending: (() => void) | undefined;
       tx.objectStore = () => ({
         put: (value: unknown, key: string) => { pending = () => records.set(key, value); },
@@ -69,6 +70,7 @@ function memoryDatabase(fault?: 'missing' | 'bytes' | 'mime' | 'write' | 'read-a
         },
       });
       queueMicrotask(() => queueMicrotask(() => {
+        if (aborted) return;
         if (mode === 'readwrite' && fault === 'write' || mode !== 'readwrite' && fault === 'read-abort') tx.onabort?.();
         else { pending?.(); tx.oncomplete?.(); }
       }));
@@ -111,5 +113,26 @@ describe('original recording verification', () => {
     const { records } = memoryDatabase(); await saveOriginalAudio('raw', original(), metadata);
     const value: any = records.get('raw'); records.set('raw', { ...value, blob: new Blob(['corrupt']) });
     await expect(getVerifiedAudio('raw')).rejects.toThrow('AUDIO_READBACK_MISMATCH');
+  });
+});
+
+
+describe('atomic audio metadata updates', () => {
+  it('preserves original bytes and unrelated consent fields through conditional updates', async () => {
+    const { records } = memoryDatabase();
+    await saveAudio('legacy', new Blob(['raw']), { createdAt: 'old', transcript: 'existing' });
+    await updateAudioMetadata('legacy', { trainingConsent: true });
+    const saved = await updateAudioMetadata('legacy', current => ({ transcript: current.transcript + ' next' }));
+    expect(saved).toMatchObject({ createdAt: 'old', trainingConsent: true, transcript: 'existing next' });
+    expect(await (records.get('legacy') as any).blob.text()).toBe('raw');
+  });
+  it('aborts conditional conflicts without changing existing metadata', async () => {
+    memoryDatabase(); await saveAudio('legacy', new Blob(['raw']), { createdAt: 'old', transcript: 'keep' });
+    await expect(updateAudioMetadata('legacy', () => { throw new Error('CONFLICT'); })).rejects.toThrow('CONFLICT');
+    expect(await updateAudioMetadata('legacy', {})).toMatchObject({ transcript: 'keep' });
+  });
+  it('rejects missing audio instead of pretending a checkpoint was saved', async () => {
+    memoryDatabase();
+    await expect(updateAudioMetadata('missing', { transcript: 'no audio' })).rejects.toThrow('AUDIO_NOT_FOUND');
   });
 });

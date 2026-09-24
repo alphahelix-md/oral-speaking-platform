@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BudgetError, budgetErrorResponse, createBudgetOperation, wavDurationMilliseconds } from './budget';
+import { MAX_PROVIDER_ATTEMPTS } from './request-policy';
+import { BudgetError, budgetErrorResponse, createBudgetOperation, RESERVE_ATTEMPT_SCRIPT, wavDurationMilliseconds } from './budget';
 
 beforeEach(() => {
   vi.stubEnv('NODE_ENV', 'production'); vi.stubEnv('RATE_LIMIT_PROVIDER', 'upstash');
@@ -8,7 +9,7 @@ beforeEach(() => {
   vi.stubEnv('BUDGET_STT_ATTEMPT_MICRO_USD', '2'); vi.stubEnv('BUDGET_EVALUATION_ATTEMPT_MICRO_USD', '3');
   vi.spyOn(console, 'info').mockImplementation(() => {}); vi.spyOn(console, 'error').mockImplementation(() => {});
 });
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const request = () => new Request('http://localhost/api/transcribe', { headers: { 'x-beta-access-code': 'synthetic-code' } });
 const input = { capability: 'transcription' as const, sessionId: 'session', operationId: 'recording:0', audioMilliseconds: 25000 };
 function redis(result: unknown = [1, 1]) {
@@ -65,7 +66,7 @@ describe('provider budget boundary', () => {
     const { fetcher } = redis(); fetcher.mockResolvedValueOnce(Response.json({ result: [1, 1] })).mockRejectedValueOnce(new Error('Write failed'));
     const provider = vi.fn().mockResolvedValue('result');
     expect(await createBudgetOperation(request(), 'account', input).run('glm', 'model', provider)).toBe('result');
-    expect(provider).toHaveBeenCalledOnce(); expect(console.error).toHaveBeenCalledWith('[BUDGET_LEDGER_WRITE_FAILED]', expect.any(Object));
+    expect(provider).toHaveBeenCalledOnce(); await vi.waitFor(() => expect(console.error).toHaveBeenCalledWith('[BUDGET_LEDGER_WRITE_FAILED]', expect.any(Object)));
   });
   it('uses stable operation keys while separating accounts and chunk indices', async () => {
     const { commands } = redis();
@@ -100,5 +101,55 @@ describe('authoritative transcription duration', () => {
     const bytes = wav(); new DataView(bytes).setUint32(28, 64000, true);
     await expect(wavDurationMilliseconds(new File([bytes], 'fixture.wav'))).rejects.toThrow('INVALID_BUDGET_INPUT');
     await expect(wavDurationMilliseconds(new File([wav().slice(0, 40)], 'fixture.wav'))).rejects.toThrow('INVALID_BUDGET_INPUT');
+  });
+});
+
+
+describe('budget deadlines and attempt contract', () => {
+  it('keeps the production Lua limit consistent with the shared provider cap', () => {
+    expect(Number(RESERVE_ATTEMPT_SCRIPT.match(/attempt > (\d+)/)?.[1])).toBe(MAX_PROVIDER_ATTEMPTS);
+  });
+  it('blocks late provider work after cancellation during reservation', async () => {
+    vi.useFakeTimers();
+    let release!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { release = resolve; })));
+    const controller = new AbortController(); const provider = vi.fn();
+    const result = createBudgetOperation(request(), 'account', input).run('glm', 'model', provider, controller.signal);
+    const rejected = expect(result).rejects.toThrow('BUDGET_UNAVAILABLE');
+    await vi.advanceTimersByTimeAsync(1);
+    controller.abort(new DOMException('Expired', 'TimeoutError')); await rejected;
+    release(Response.json({ result: [1, 1] })); await vi.advanceTimersByTimeAsync(1);
+    expect(provider).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('stops before reserving or sending when the operation already expired', async () => {
+    const { fetcher } = redis(); const provider = vi.fn();
+    const signal = AbortSignal.abort(new DOMException('Expired', 'TimeoutError'));
+    await expect(createBudgetOperation(request(), 'account', input).run('glm', 'model', provider, signal)).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(fetcher).not.toHaveBeenCalled(); expect(provider).not.toHaveBeenCalled();
+  });
+  it('bounds a stalled Redis response body and refuses the provider call', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => new Promise(() => {}) }));
+    const provider = vi.fn();
+    const result = createBudgetOperation(request(), 'account', input).run('glm', 'model', provider);
+    const rejected = expect(result).rejects.toThrow('BUDGET_UNAVAILABLE');
+    await vi.advanceTimersByTimeAsync(5000); await rejected;
+    expect(provider).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+
+describe('nonblocking completion receipts', () => {
+  it('returns received provider output without waiting on a stalled final ledger write', async () => {
+    vi.useFakeTimers();
+    const { fetcher } = redis();
+    fetcher.mockResolvedValueOnce(Response.json({ result: [1, 1] })).mockImplementationOnce(() => new Promise(() => {}));
+    const provider = vi.fn().mockResolvedValue('received');
+    const operation = createBudgetOperation(request(), 'account', input);
+    expect(await operation.run('glm', 'model', provider)).toBe('received');
+    expect(provider).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(console.error).toHaveBeenCalledWith('[BUDGET_LEDGER_WRITE_FAILED]', expect.any(Object));
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

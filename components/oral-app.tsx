@@ -7,6 +7,7 @@ import { modes } from '@/training/config';
 import { createDraft, createSession, speakingReducer } from '@/core/speaking/engine';
 import { deleteSessions, getSessions, getStats, readSessions, saveSession } from '@/core/session/storage';
 import { commitDraft, evaluationKey, recoverSession, RequestNotSentError, transcribeDraft } from '@/core/session/recovery';
+import { fetchJsonWithTimeout } from '@/lib/http/fetch-json';
 import { readPreference, writePreference } from '@/core/session/preferences';
 import { downloadPracticeBackup } from '@/core/session/export';
 import { AudioRecorder } from '@/core/audio/recorder';
@@ -26,7 +27,7 @@ import { demoEvaluation, demoQuestion } from '@/lib/ai/demo';
 import { unavailableEvaluation, unavailableReviewCopy } from '@/lib/ai/unavailable-review';
 import { IELTS_PART_1, IELTS_PART_2, IELTS_PART_3, ieltsPartAt, ieltsPlan } from '@/exams/ielts/plan';
 import { ieltsQuestionSets } from '@/exams/ielts/bank';
-import type { AnswerDraft, LanguageId, ModeId, Session, Turn } from '@/types/speaking';
+import type { AnswerDraft, Evaluation, LanguageId, ModeId, Session, Turn } from '@/types/speaking';
 import { getSupabaseAuthHeaders, getSupabaseBrowser } from '@/lib/auth/supabase-browser';
 import { deleteMyTrainingAudio, uploadTrainingAudio } from '@/lib/audio/training-upload';
 import { matchesTranscriptionLanguage } from '@/lib/speech/language-boundary';
@@ -40,12 +41,7 @@ type Theme = 'light' | 'dark';
 type TrainingConsent = 'unset' | 'local_only' | 'training';
 // Interface copy is selected independently of the language being practiced.
 
-async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number) {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
-  try { return await fetch(input, { ...init, signal: controller.signal }); }
-  finally { window.clearTimeout(timeout); }
-}
+type TranscriptionResponse = { text?: string; provider?: string; error?: string; requestId?: string; requestStarted?: boolean; received?: { fileSize?: number; mimeType?: string } };
 const interfaceLanguages: { id: UiLanguage; label: string }[] = [
   { id: 'zh-CN', label: '简体中文' }, { id: 'en', label: 'English' }, { id: 'zh-HK', label: '繁體中文（香港）' }, { id: 'ja', label: '日本語' },
 ];
@@ -476,14 +472,13 @@ export function OralApp() {
         setSpeechDiagnostic(previous => ({ ...previous, fileName: chunk.name, fileMime: chunk.type, fileSize: chunk.size, formField: 'audio', requestUrl: '/api/transcribe', requestCount: speechRequestCount.current, uploadStatus: 'uploading' }));
         if (process.env.NEXT_PUBLIC_SPEECH_DEBUG === 'true') console.info('[SPEECH_UPLOAD]', { requestId, chunkIndex: index, fileName: chunk.name, fileType: chunk.type, fileSize: chunk.size, formFields: Array.from(form.keys()) });
         const started = performance.now();
-        const response = await fetch('/api/transcribe', {
+        const { response, data } = await fetchJsonWithTimeout<TranscriptionResponse>('/api/transcribe', async () => ({
           method: 'POST',
           headers: { ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()), 'x-speech-request-id': requestId, 'x-speech-chunk-index': String(index), 'x-oral-session-id': sessionRef.current!.id },
           body: form,
-        });
+        }), 60_000);
         const duration = Math.round(performance.now() - started);
         setSpeechDiagnostic(previous => ({ ...previous, httpStatus: response.status, requestDurationMs: duration, uploadStatus: response.ok ? 'server responded' : 'server rejected' }));
-        const data = await response.json();
         setSpeechDiagnostic(previous => ({ ...previous, serverReceived: Boolean(data.received), serverFileSize: data.received?.fileSize, serverMime: data.received?.mimeType, provider: data.provider, errorCode: data.error, requestId: data.requestId || requestId }));
         if (process.env.NEXT_PUBLIC_SPEECH_DEBUG === 'true') console.info('[SPEECH_RESPONSE]', { requestId, chunkIndex: index, httpStatus: response.status, durationMs: duration, errorCode: data.error, serverReceived: Boolean(data.received) });
         if (!response.ok) {
@@ -621,12 +616,12 @@ export function OralApp() {
       if (current.turns.some(turn => turn.transcript.trim()) && !alreadyRequested) {
         try {
           current = persistSession({ ...current, evaluationRun: { key, status: 'running' } });
-          const response = await fetchWithTimeout('/api/ai', {
+          const requested = current;
+          const { response, data } = await fetchJsonWithTimeout<{ evaluation?: Evaluation }>('/api/ai', async () => ({
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-oral-session-id': current.id, ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()) },
-            body: JSON.stringify({ action: 'evaluate', uiLanguage, language: current.language, mode: current.mode, level: current.level, topic: current.topic, turns: current.turns }),
-          }, 25_000);
-          const data = await response.json();
+            headers: { 'Content-Type': 'application/json', 'x-oral-session-id': requested.id, ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()) },
+            body: JSON.stringify({ action: 'evaluate', uiLanguage, language: requested.language, mode: requested.mode, level: requested.level, topic: requested.topic, turns: requested.turns }),
+          }), 25_000);
           if (response.ok && data.evaluation?.model === 'ai') evaluation = data.evaluation;
           else setNotice(unavailableReviewCopy[uiLanguage].notice);
         } catch {
@@ -641,7 +636,19 @@ export function OralApp() {
     }
   }
   function retry(turn: Turn) { if (!session || busy || restoring || sessionSaveFailed || audioSaveFailed) return; originalAudio.current = null; setSession(s => s && speakingReducer(s, { type: 'RETRY', turnId: turn.id })); setTranscript(''); setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setPendingAudioId(null); setAudioSaveFailed(false); setQuickFeedbackTurnId(null); setSeconds(0); setNotice(extra.sameQuestion); setRetryExamPart(mode === 'ielts' ? turn.examPart || ieltsPartAt(topic, Math.max(0, session.turns.findIndex(item => item.id === turn.id))) : undefined); navigate('speaking'); }
-  async function playAudio(id: string) { const blob = await getPlaybackAudio(id); if (!blob) { setNotice(extra.audioMissing); return; } const url = URL.createObjectURL(blob); const player = new Audio(url); player.onended = () => URL.revokeObjectURL(url); player.play().catch(() => setNotice(extra.playback)); }
+  async function playAudio(id: string) {
+    let url: string | undefined;
+    const release = () => { if (url) { URL.revokeObjectURL(url); url = undefined; } };
+    try {
+      const blob = await getPlaybackAudio(id);
+      if (!blob) { setNotice(extra.audioMissing); return; }
+      url = URL.createObjectURL(blob);
+      const player = new Audio(url);
+      player.onended = release;
+      player.onerror = () => { release(); setNotice(extra.playback); };
+      await player.play();
+    } catch { release(); setNotice(extra.playback); }
+  }
   async function openSession(item: Session) {
     if (busy || recording || restoring || sessionSaveFailed || audioSaveFailed) return;
     setRestoring(true); setBusy(true);
@@ -658,7 +665,7 @@ export function OralApp() {
       if (draft?.audioId) {
         try {
           const raw = await getVerifiedAudio(draft.audioId);
-          originalAudio.current = raw; setAudio(await getPlaybackAudio(draft.audioId) || raw);
+          originalAudio.current = raw; setAudio(await getPlaybackAudio(draft.audioId).catch(() => raw) || raw);
           restored = { ...restored, draft: { ...draft, audioStatus: 'verified' } };
         } catch { setAudioSaveFailed(true); restored = { ...restored, draft: { ...draft, audioStatus: 'failed' } }; }
       }

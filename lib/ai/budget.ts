@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { withDeadline } from '@/lib/http/deadline';
+import { MAX_PROVIDER_ATTEMPTS } from './request-policy';
 
 export type PaidCapability = 'transcription' | 'evaluation';
 type Limits = { calls: number; audioMilliseconds: number; estimatedMicroUsd: number };
@@ -56,19 +58,21 @@ end
 return {1, attempt}
 `;
 
-async function redis(command: (string | number)[]): Promise<unknown> {
+async function redis(command: (string | number)[], signal?: AbortSignal): Promise<unknown> {
   const url = process.env.UPSTASH_REDIS_REST_URL?.trim();
   const token = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
   if (!url || !token) throw new BudgetError('BUDGET_NOT_CONFIGURED');
   try {
-    const response = await fetch(url.replace(/\/$/, ''), {
-      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(command), cache: 'no-store', signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) throw new Error('Redis request rejected');
-    const value: { result?: unknown; error?: unknown } = await response.json();
-    if (value.error || !('result' in value)) throw new Error('Redis command failed');
-    return value.result;
+    return await withDeadline(5000, async requestSignal => {
+      const response = await fetch(url.replace(/\/$/, ''), {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(command), cache: 'no-store', signal: requestSignal,
+      });
+      if (!response.ok) throw new Error('Redis request rejected');
+      const value: { result?: unknown; error?: unknown } = await response.json();
+      if (value.error || !('result' in value)) throw new Error('Redis command failed');
+      return value.result;
+    }, signal);
   } catch { throw new BudgetError('BUDGET_UNAVAILABLE'); }
 }
 
@@ -83,18 +87,19 @@ export function createBudgetOperation(request: Request, accountId: string | unde
   const operation = hash(`${subject}:${input.capability}:${input.operationId}`);
   const operationKey = `{oral-budget}:v1:operation:${operation}`;
   const owner = randomUUID(); let attempts = 0;
-  const record = async (attempt: number, data: object) => {
+  const record = async (attempt: number, data: object, signal?: AbortSignal) => {
     console.info('[PROVIDER_ATTEMPT]', { operation, capability: input.capability, attempt, enforced: Boolean(limits), ...data });
     if (limits) {
-      try { await redis(['HSET', operationKey, `attempt_${attempt}`, JSON.stringify(data)]); }
+      try { await redis(['HSET', operationKey, `attempt_${attempt}`, JSON.stringify(data)], signal); }
       catch { console.error('[BUDGET_LEDGER_WRITE_FAILED]', { operation, attempt }); }
     }
   };
   return {
     get attempts() { return attempts; },
-    async run<T>(provider: string, model: string, invoke: () => Promise<T>): Promise<T> {
+    async run<T>(provider: string, model: string, invoke: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+      signal?.throwIfAborted();
       const attempt = attempts + 1;
-      if (attempt > 2) throw new BudgetError('BUDGET_LIMIT_REACHED', attempts > 0);
+      if (attempt > MAX_PROVIDER_ATTEMPTS) throw new BudgetError('BUDGET_LIMIT_REACHED', attempts > 0);
       const startedAt = new Date().toISOString();
       const meta = { provider, model, startedAt, audioMilliseconds: milliseconds, estimatedMicroUsd: limits?.attemptEstimate ?? null };
       if (limits) {
@@ -102,7 +107,7 @@ export function createBudgetOperation(request: Request, accountId: string | unde
         const keys = [operationKey, `{oral-budget}:v1:account:${subject}:${day}`, `{oral-budget}:v1:global:${day}`, `{oral-budget}:v1:session:${session}`];
         let result: unknown;
         try { result = await redis(['EVAL', RESERVE_ATTEMPT_SCRIPT, keys.length, ...keys, owner, attempt, milliseconds, limits.attemptEstimate,
-          ...[limits.account, limits.global, limits.session].flatMap(limit => [limit.calls, limit.audioMilliseconds, limit.estimatedMicroUsd]), JSON.stringify({ ...meta, status: 'reserved' })]); }
+          ...[limits.account, limits.global, limits.session].flatMap(limit => [limit.calls, limit.audioMilliseconds, limit.estimatedMicroUsd]), JSON.stringify({ ...meta, status: 'reserved' })], signal); }
         catch (error) { throw new BudgetError(error instanceof BudgetError ? error.code : 'BUDGET_UNAVAILABLE', attempts > 0); }
         if (!Array.isArray(result) || result[0] !== 1) {
           const code = Array.isArray(result) && result[1] === 'DUPLICATE' ? 'REQUEST_ALREADY_STARTED' : Array.isArray(result) && result[1] === 'LIMIT' ? 'BUDGET_LIMIT_REACHED' : 'BUDGET_UNAVAILABLE';
@@ -112,12 +117,15 @@ export function createBudgetOperation(request: Request, accountId: string | unde
       attempts = attempt;
       const started = Date.now();
       try {
+        signal?.throwIfAborted();
         const value = await invoke();
         const failed = value instanceof Response && !value.ok;
-        await record(attempt, { ...meta, status: failed ? 'failed' : value instanceof Response ? 'response_received' : 'succeeded', latencyMs: Date.now() - started, ...(value instanceof Response ? { httpStatus: value.status } : {}) });
+        // The reserved receipt is authoritative. A slow optional ledger update
+        // must not turn a received result into another paid model attempt.
+        void record(attempt, { ...meta, status: failed ? 'failed' : value instanceof Response ? 'response_received' : 'succeeded', latencyMs: Date.now() - started, ...(value instanceof Response ? { httpStatus: value.status } : {}) }, signal);
         return value;
       } catch (error) {
-        await record(attempt, { ...meta, status: 'uncertain', latencyMs: Date.now() - started });
+        void record(attempt, { ...meta, status: 'uncertain', latencyMs: Date.now() - started }, signal);
         throw error;
       }
     },

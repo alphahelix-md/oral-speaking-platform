@@ -1,8 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Download, Play, RotateCcw, Trash2, UploadCloud } from 'lucide-react';
-import { deleteAudio, getPlaybackAudio, listAudio, updateAudioMetadata, type AudioLibraryEntry, type AudioMetadata } from '@/core/audio/store';
+import { deleteAudio, getPlaybackAudio, listAudio, type AudioLibraryEntry } from '@/core/audio/store';
+import { transcribeLegacyAudio } from '@/core/audio/legacy-transcription';
+import { RequestNotSentError } from '@/core/session/recovery';
+import { fetchJsonWithTimeout } from '@/lib/http/fetch-json';
 import { recordedAudioToWavChunks } from '@/core/audio/wav';
 import { speechErrors } from '@/lib/speech/ui-copy';
 import { getSupabaseAuthHeaders } from '@/lib/auth/supabase-browser';
@@ -52,6 +55,7 @@ export function RecordingLibrary({ onResume, sessions, uiLanguage, accessCode, o
   const [selectedId, setSelectedId] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const transcribingLock = useRef(false);
   const [transcribingId, setTranscribingId] = useState('');
   const [transcribingProgress, setTranscribingProgress] = useState('');
   const [errorCode, setErrorCode] = useState('');
@@ -105,6 +109,7 @@ export function RecordingLibrary({ onResume, sessions, uiLanguage, accessCode, o
   }
 
   async function retryTranscription(entry: AudioLibraryEntry) {
+    if (transcribingLock.current) return;
     if (entry.metadata?.kind === 'original') {
       const owner = sessions.find(item => item.draft?.audioId === entry.id);
       if (owner) onResume(owner);
@@ -114,49 +119,39 @@ export function RecordingLibrary({ onResume, sessions, uiLanguage, accessCode, o
     const language = entry.metadata?.language || linked?.session.language;
     if (!language) { setError(recovery.unknownLanguage); return; }
     if (!accessCode) { setError(speechErrors[uiLanguage].betaAccessDenied); setErrorCode('BETA_ACCESS_DENIED'); onEditAccessCode(); return; }
-    const parts = [...(entry.metadata?.transcriptionChunks || [])];
+    let hasPartial = Boolean(entry.metadata?.transcript);
+    transcribingLock.current = true;
     setError(''); setErrorCode(''); setTranscribingId(entry.id);
     try {
       const chunks = await recordedAudioToWavChunks(entry.blob, entry.metadata?.durationSeconds);
-      if (!chunks.length) throw new Error('EMPTY_TRANSCRIPT');
-      const requestId = 'sp_' + Date.now().toString(36) + '_' + crypto.randomUUID().slice(0, 8);
-      for (const [index, chunk] of chunks.entries()) {
-        if (index in parts) continue;
+      await transcribeLegacyAudio(entry.id, chunks, async (chunk, index, requestId) => {
         setTranscribingProgress(String(index + 1) + '/' + String(chunks.length));
         const form = new FormData();
         form.append('audio', chunk, chunk.name);
         form.append('language', language);
-        const response = await fetch('/api/transcribe', {
+        const { response, data } = await fetchJsonWithTimeout<{ text?: string; error?: string; requestStarted?: boolean }>('/api/transcribe', async () => ({
           method: 'POST',
           headers: { 'x-beta-access-code': accessCode, ...(await getSupabaseAuthHeaders()), 'x-speech-request-id': requestId, 'x-speech-chunk-index': String(index), 'x-oral-session-id': entry.metadata?.sessionId || linked?.session.id || entry.id },
           body: form,
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(String(data.error || 'TRANSCRIPTION_FAILED'));
-        parts[index] = String(data.text || '').trim();
-        const transcript = parts.filter(Boolean).join(' ');
-        const metadata: Partial<AudioMetadata> = {
-          createdAt: entry.metadata?.createdAt || linked?.turn.createdAt || new Date().toISOString(),
-          language,
-          sessionId: entry.metadata?.sessionId || linked?.session.id,
-          question: entry.metadata?.question || linked?.turn.question,
-          transcriptionChunks: [...parts],
-          transcript,
-        };
-        await updateAudioMetadata(entry.id, metadata);
-        setEntries(items => items.map(item => item.id === entry.id ? {
-          ...item,
-          metadata: { ...item.metadata, ...metadata, trainingConsent: item.metadata?.trainingConsent || false } as AudioMetadata,
-        } : item));
-      }
-      if (!parts.some(Boolean)) throw new Error('EMPTY_TRANSCRIPT');
+        }), 60_000);
+        if (!response.ok) {
+          const code = String(data.error || 'TRANSCRIPTION_FAILED');
+          if (data.requestStarted === false || ['AUTH_REQUIRED', 'AUTH_ACCESS_CODE_MISMATCH', 'BETA_ACCESS_DENIED', 'BETA_DAILY_LIMIT_REACHED', 'BETA_GUARD_NOT_CONFIGURED', 'INVALID_AUDIO_OR_LANGUAGE'].includes(code)) throw new RequestNotSentError(code);
+          throw new Error(code);
+        }
+        return String(data.text || '').trim();
+      }, metadata => {
+        hasPartial = Boolean(metadata.transcript);
+        setEntries(items => items.map(item => item.id === entry.id ? { ...item, metadata } : item));
+      });
     } catch (failure) {
       const code = failure instanceof Error ? failure.message : 'TRANSCRIPTION_FAILED';
       setErrorCode(code);
       const messages = speechErrors[uiLanguage];
-      const detail = code === 'BETA_ACCESS_DENIED' ? messages.betaAccessDenied : code === 'BETA_DAILY_LIMIT_REACHED' ? messages.betaDailyLimit : code === 'BETA_GUARD_NOT_CONFIGURED' ? messages.betaUnavailable : code === 'GLM_QUOTA_OR_LIMIT' ? messages.glmQuota : code === 'EMPTY_TRANSCRIPT' ? messages.emptyTranscript : messages.transcriptionFailed;
-      setError(parts.some(Boolean) ? messages.partialTranscript + ' ' + detail : detail);
-    } finally { setTranscribingId(''); setTranscribingProgress(''); }
+      const uncertain = { 'zh-CN': '上次转写结果未确认，已停止重复请求。可播放或下载录音，已保存文字仍保留。', en: 'The previous transcription result is unknown. Repeat requests are blocked. You can play or download the recording; saved text is retained.', 'zh-HK': '上次轉寫結果未確認，已停止重複請求。可播放或下載錄音，已儲存文字仍保留。', ja: '前回の文字起こし結果が不明なため、再送信を停止しました。録音の再生・ダウンロードと保存済みテキストは利用できます。' };
+      const detail = code === 'TRANSCRIPTION_UNCERTAIN' ? uncertain[uiLanguage] : code === 'BETA_ACCESS_DENIED' ? messages.betaAccessDenied : code === 'BETA_DAILY_LIMIT_REACHED' ? messages.betaDailyLimit : code === 'BETA_GUARD_NOT_CONFIGURED' ? messages.betaUnavailable : code === 'GLM_QUOTA_OR_LIMIT' ? messages.glmQuota : code === 'EMPTY_TRANSCRIPT' ? messages.emptyTranscript : messages.transcriptionFailed;
+      setError(hasPartial ? messages.partialTranscript + ' ' + detail : detail);
+    } finally { transcribingLock.current = false; setTranscribingId(''); setTranscribingProgress(''); }
   }
 
   async function copyTranscript(value: string, id: string) {

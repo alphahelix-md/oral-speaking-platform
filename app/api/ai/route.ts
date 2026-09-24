@@ -1,3 +1,5 @@
+import { withDeadline } from '@/lib/http/deadline';
+import { EVALUATION_DEADLINE_MS } from '@/lib/ai/request-policy';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { aiAvailable, UpstreamAiError } from '@/lib/ai/server';
@@ -27,22 +29,26 @@ export async function POST(request: Request) {
   let action: 'evaluate' | undefined;
   let provider: ReturnType<typeof resolveTextProvider> | undefined;
   try {
-    const accountId = await guardBetaAccess(request);
-    if (!aiAvailable) return NextResponse.json({ error: 'AI_NOT_CONFIGURED' }, { status: 503 });
-    const input = requestSchema.parse(await request.json());
-    action = input.action;
-    provider = resolveTextProvider();
-    console.info('[AI_REQUEST]', { action, provider });
-    const key = createHash('sha256').update(JSON.stringify(input.turns.map(turn => turn.id))).digest('hex');
-    const sessionId = request.headers.get('x-oral-session-id') || key;
-    const operation = createBudgetOperation(request, accountId, { capability: 'evaluation', sessionId, operationId: `${sessionId}:${key}` });
-    const modelFor = (selected: string) => selected === 'glm' ? process.env.GLM_TEXT_MODEL || 'glm-4.7-flash' : selected === 'deepseek' ? process.env.DEEPSEEK_TEXT_MODEL || 'deepseek-flash' : process.env.OPENAI_TEXT_MODEL || 'gpt-4.1-mini';
-    const result = await runCapability('content_evaluation', { primary: provider }, (selected, timeoutMs) =>
-      operation.run(selected, modelFor(selected), () => transcriptTextEvaluator.evaluate(selected, input.language, input.mode, input.turns, input.uiLanguage, timeoutMs)));
-    provider = result.provider;
-    const evaluation = result.value;
-    console.info('[AI_SUCCESS]', { action, provider, durationMs: Date.now() - startedAt });
-    return NextResponse.json({ evaluation });
+    return await withDeadline(EVALUATION_DEADLINE_MS, async signal => {
+      const accountId = await guardBetaAccess(request);
+      signal.throwIfAborted();
+      if (!aiAvailable) return NextResponse.json({ error: 'AI_NOT_CONFIGURED' }, { status: 503 });
+      const input = requestSchema.parse(await request.json());
+      signal.throwIfAborted();
+      action = input.action;
+      provider = resolveTextProvider();
+      console.info('[AI_REQUEST]', { action, provider });
+      const key = createHash('sha256').update(JSON.stringify(input.turns.map(turn => turn.id))).digest('hex');
+      const sessionId = request.headers.get('x-oral-session-id') || key;
+      const operation = createBudgetOperation(request, accountId, { capability: 'evaluation', sessionId, operationId: `${sessionId}:${key}` });
+      const modelFor = (selected: string) => selected === 'glm' ? process.env.GLM_TEXT_MODEL || 'glm-4.7-flash' : selected === 'deepseek' ? process.env.DEEPSEEK_TEXT_MODEL || 'deepseek-flash' : process.env.OPENAI_TEXT_MODEL || 'gpt-4.1-mini';
+      const result = await runCapability('content_evaluation', { primary: provider }, (selected, timeoutMs, signal) =>
+        operation.run(selected, modelFor(selected), () => transcriptTextEvaluator.evaluate(selected, input.language, input.mode, input.turns, input.uiLanguage, timeoutMs, signal), signal), signal);
+      provider = result.provider;
+      const evaluation = result.value;
+      console.info('[AI_SUCCESS]', { action, provider, durationMs: Date.now() - startedAt });
+      return NextResponse.json({ evaluation });
+    }, request.signal);
   } catch (error) {
     const budget = budgetErrorResponse(error); if (budget) return NextResponse.json({ error: budget.error, requestStarted: budget.requestStarted }, { status: budget.status });
     const guard = guardErrorResponse(error); if (guard) return NextResponse.json({ error: guard.error }, { status: guard.status });

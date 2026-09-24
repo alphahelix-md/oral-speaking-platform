@@ -12,6 +12,14 @@ Account/site counters use UTC dates, with two-day retention. Session counters an
 
 Without configured account auth, one access code shares one allowance. IP changes cannot reset that code's bucket. Session IDs are client supplied; account and global caps remain authoritative even if a client invents new Session IDs.
 
+## Deadline and retry contract
+
+The shared maximum is two actual provider attempts, including any future approved fallback. With no fallback configured, the primary can retry once. If an approved fallback is later configured, it takes the second slot; there is no third slot. No fallback is enabled by this change.
+
+Evaluation has a 21-second server deadline starting before authentication/body parsing, with at most 10 seconds per attempt. Transcription has a 45-second overall server deadline. Budget reads/reservations and provider requests share cancellation; late auth or reservation responses cannot start a provider request. Client deadlines are 25 seconds for evaluation and 60 seconds for transcription, including auth headers and response bodies. A client timeout remains an unknown result; it is not proof that a provider did not bill.
+
+The reservation is committed before the provider call. Final ledger updates are optional, bounded best-effort updates outside the response path: a stalled final write must never discard received output or cause another paid retry. Process termination can leave a `reserved` receipt without a final marker; reconciliation remains required and no refund is inferred.
+
 ## Manual configuration still required
 
 - `RATE_LIMIT_PROVIDER=access-code-only` with `DEPLOYMENT_STAGE=test` remains explicitly unmetered test mode. It has no daily hard cap. Never describe it as Cost Governor enabled.

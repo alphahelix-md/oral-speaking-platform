@@ -21,7 +21,7 @@ const providerConfig: Record<TextProvider, { key?: string; model: string; url: s
 };
 export const aiAvailable = getAllowedTextProviders().some(provider => Boolean(providerConfig[provider].key));
 
-async function generate(provider: TextProvider, instructions: string, input: string, timeoutMs = 20_000): Promise<string> {
+async function generate(provider: TextProvider, instructions: string, input: string, timeoutMs = 20_000, signal?: AbortSignal): Promise<string> {
   const config = providerConfig[provider];
   if (!config.key) throw new Error(`${provider.toUpperCase()}_NOT_CONFIGURED`);
   const requestBody = config.format === 'responses'
@@ -29,7 +29,7 @@ async function generate(provider: TextProvider, instructions: string, input: str
     : { model: config.model, messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }], temperature: 0.4, ...(provider === 'deepseek' ? { thinking: { type: 'disabled' }, max_tokens: 1200 } : {}) };
   const response = await fetch(config.url, {
     method: 'POST', headers: { Authorization: `Bearer ${config.key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody), cache: 'no-store', signal: AbortSignal.timeout(timeoutMs)
+    body: JSON.stringify(requestBody), cache: 'no-store', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)
   });
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null);
@@ -70,12 +70,12 @@ export async function nextQuestion(provider: TextProvider, language: LanguageId,
 }
 
 const evaluationSchema = z.object({ summary: z.string(), scores: z.array(z.object({ key: z.string(), value: z.number().min(0).max(10), note: z.string() })), strengths: z.array(z.string()), improvements: z.array(z.string()), weaknesses: z.array(z.string()) });
-export async function evaluate(provider: TextProvider, language: LanguageId, mode: ModeId, turns: Turn[], uiLanguage: UiLanguage = 'en', timeoutMs = 20_000): Promise<Evaluation> {
+export async function evaluate(provider: TextProvider, language: LanguageId, mode: ModeId, turns: Turn[], uiLanguage: UiLanguage = 'en', timeoutMs = 20_000, signal?: AbortSignal): Promise<Evaluation> {
   const config = languages[language]; const rubric = modes[mode].rubric || config.rubric;
   const transcript = turns.map(t => `Question: ${t.question}\nAttempt ${t.attempt}: ${t.transcript}`).join('\n');
   const deliveryEvidence = buildDeliveryEvidence(turns);
   const feedbackLanguage = { 'zh-CN': 'Simplified Chinese', en: 'English', 'zh-HK': 'Traditional Chinese as used in Hong Kong', ja: 'Japanese' }[uiLanguage];
-  const output = await generate(provider, `${config.evaluationPrompt}\nRubric: ${JSON.stringify(rubric)}. Write all feedback prose in ${feedbackLanguage}, regardless of the language being practiced. Keep JSON keys and rubric keys in English. Return ONLY JSON: {"summary":string,"scores":[{"key":string,"value":number 0-10,"note":string}],"strengths":string[],"improvements":string[],"weaknesses":string[]}. Include only rubric keys supported by transcript. Audio evidence below contains microphone-volume estimates only. Use it for specific rhythm observations in summary or improvements, but do not turn it into a numeric score and do not infer pronunciation, accent, acoustic fluency, or audio quality. Never score pronunciation from a transcript. For IELTS, these are practice indicators, never official bands.`, `${transcript}\n\nBasic audio evidence:\n${deliveryEvidence.length ? deliveryEvidence.join('\n') : 'Unavailable.'}`, timeoutMs);
+  const output = await generate(provider, `${config.evaluationPrompt}\nRubric: ${JSON.stringify(rubric)}. Write all feedback prose in ${feedbackLanguage}, regardless of the language being practiced. Keep JSON keys and rubric keys in English. Return ONLY JSON: {"summary":string,"scores":[{"key":string,"value":number 0-10,"note":string}],"strengths":string[],"improvements":string[],"weaknesses":string[]}. Include only rubric keys supported by transcript. Audio evidence below contains microphone-volume estimates only. Use it for specific rhythm observations in summary or improvements, but do not turn it into a numeric score and do not infer pronunciation, accent, acoustic fluency, or audio quality. Never score pronunciation from a transcript. For IELTS, these are practice indicators, never official bands.`, `${transcript}\n\nBasic audio evidence:\n${deliveryEvidence.length ? deliveryEvidence.join('\n') : 'Unavailable.'}`, timeoutMs, signal);
   const parsed = evaluationSchema.parse(JSON.parse(output.replace(/^```(?:json)?\s*|\s*```$/g, '')));
   return { ...parsed, scores: parsed.scores.filter(s => s.key !== 'pronunciation' && rubric.some(r => r.key === s.key)).map(s => ({ ...s, label: rubric.find(r => r.key === s.key)!.label })), model: 'ai', evidenceSources: deliveryEvidence.length ? ['transcript', 'basic_audio_metrics'] : ['transcript'] };
 }

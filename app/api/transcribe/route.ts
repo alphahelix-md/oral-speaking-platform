@@ -1,3 +1,5 @@
+import { withDeadline } from '@/lib/http/deadline';
+import { TRANSCRIPTION_DEADLINE_MS } from '@/lib/ai/request-policy';
 import { NextResponse } from 'next/server';
 import { guardBetaAccess, guardErrorResponse } from '@/lib/ai/guard';
 import { budgetErrorResponse, createBudgetOperation, wavDurationMilliseconds } from '@/lib/ai/budget';
@@ -10,23 +12,30 @@ export async function POST(request: Request) {
   const startedAt = Date.now();
   console.info('[TRANSCRIBE] request received', { requestId });
   try {
-    const accountId = await guardBetaAccess(request);
-    const form = await request.formData(); const audio = form.get('audio'); const language = form.get('language');
-    const providerId = resolveSpeechProvider();
-    console.info('[TRANSCRIBE] upload', { requestId, chunkIndex: request.headers.get('x-speech-chunk-index') || '0', hasFile: audio instanceof File, fileName: audio instanceof File ? audio.name : null, fileSize: audio instanceof File ? audio.size : null, mimeType: audio instanceof File ? audio.type : null, language: String(language), provider: providerId, model: providerId === 'glm' ? process.env.GLM_TRANSCRIBE_MODEL || 'glm-asr-2512' : process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe' });
-    if (!(audio instanceof File) || audio.size === 0 || audio.size > 20_000_000 || !['en', 'ja'].includes(String(language))) return NextResponse.json({ error: 'INVALID_AUDIO_OR_LANGUAGE', requestId }, { status: 400, headers: { 'x-speech-request-id': requestId } });
-    const rawChunk = request.headers.get('x-speech-chunk-index') || '0';
-    if (!/^(?:[0-9]|1[01])$/.test(rawChunk)) return NextResponse.json({ error: 'INVALID_BUDGET_INPUT', requestStarted: false, requestId }, { status: 400 });
-    const milliseconds = await wavDurationMilliseconds(audio);
-    const operation = createBudgetOperation(request, accountId, {
-      capability: 'transcription', sessionId: request.headers.get('x-oral-session-id') || requestId,
-      operationId: `${requestId}:${rawChunk}`, audioMilliseconds: milliseconds,
-    });
-    const model = providerId === 'glm' ? process.env.GLM_TRANSCRIBE_MODEL || 'glm-asr-2512' : process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe';
-    const budgetFetch: typeof fetch = (input, init) => operation.run(providerId, model, () => fetch(input, init));
-    const result = await getSpeechProvider().transcribe(audio, language as LanguageId, `${requestId}_${rawChunk}`, budgetFetch);
-    console.info('[TRANSCRIBE] success', { requestId, provider: result.provider, textLength: result.text.length, durationMs: Date.now() - startedAt });
-    return NextResponse.json({ ...result, transcript: result.text, requestId, received: { fileSize: audio.size, mimeType: audio.type } }, { headers: { 'x-speech-request-id': requestId } });
+    return await withDeadline(TRANSCRIPTION_DEADLINE_MS, async signal => {
+      const accountId = await guardBetaAccess(request);
+      signal.throwIfAborted();
+      const form = await request.formData(); const audio = form.get('audio'); const language = form.get('language');
+      signal.throwIfAborted();
+      const providerId = resolveSpeechProvider();
+      console.info('[TRANSCRIBE] upload', { requestId, chunkIndex: request.headers.get('x-speech-chunk-index') || '0', hasFile: audio instanceof File, fileName: audio instanceof File ? audio.name : null, fileSize: audio instanceof File ? audio.size : null, mimeType: audio instanceof File ? audio.type : null, language: String(language), provider: providerId, model: providerId === 'glm' ? process.env.GLM_TRANSCRIBE_MODEL || 'glm-asr-2512' : process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe' });
+      if (!(audio instanceof File) || audio.size === 0 || audio.size > 20_000_000 || !['en', 'ja'].includes(String(language))) return NextResponse.json({ error: 'INVALID_AUDIO_OR_LANGUAGE', requestId }, { status: 400, headers: { 'x-speech-request-id': requestId } });
+      const rawChunk = request.headers.get('x-speech-chunk-index') || '0';
+      if (!/^(?:[0-9]|1[01])$/.test(rawChunk)) return NextResponse.json({ error: 'INVALID_BUDGET_INPUT', requestStarted: false, requestId }, { status: 400 });
+      const milliseconds = await wavDurationMilliseconds(audio);
+      signal.throwIfAborted();
+      const operation = createBudgetOperation(request, accountId, {
+        capability: 'transcription', sessionId: request.headers.get('x-oral-session-id') || requestId,
+        operationId: `${requestId}:${rawChunk}`, audioMilliseconds: milliseconds,
+      });
+      const model = providerId === 'glm' ? process.env.GLM_TRANSCRIBE_MODEL || 'glm-asr-2512' : process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe';
+      const budgetFetch: typeof fetch = (input, init) => operation.run(providerId, model, () => fetch(input, {
+        ...init, signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal,
+      }), signal);
+      const result = await getSpeechProvider().transcribe(audio, language as LanguageId, `${requestId}_${rawChunk}`, budgetFetch);
+      console.info('[TRANSCRIBE] success', { requestId, provider: result.provider, textLength: result.text.length, durationMs: Date.now() - startedAt });
+      return NextResponse.json({ ...result, transcript: result.text, requestId, received: { fileSize: audio.size, mimeType: audio.type } }, { headers: { 'x-speech-request-id': requestId } });
+    }, request.signal);
   } catch (error) {
     const budget = budgetErrorResponse(error);
     if (budget) return NextResponse.json({ error: budget.error, requestStarted: budget.requestStarted, requestId }, { status: budget.status, headers: { 'x-speech-request-id': requestId } });
