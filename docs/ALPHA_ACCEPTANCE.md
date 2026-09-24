@@ -69,3 +69,6 @@ Offline evidence collection and calculation: see `docs/qa/V0_EVIDENCE.md`. An em
 
 
 Budget/service follow-up: code boundaries and available configuration were audited; the question TTS route now has a complete deadline and cancellation cleanup. See [BUDGET_SERVICE_AUDIT.md](qa/BUDGET_SERVICE_AUDIT.md). Real Redis and invoice checks remain blocked on dedicated test configuration; offline Lua extraction is not live-budget acceptance. The TTS runtime change requires a new deployment; the last confirmed live application remains bf7feac.
+
+
+Unattended follow-up on c12a196: five isolated browser audio-integrity cases and two actual 65-second synthetic recording recovery cases passed; see [AUDIO_RECOVERY_FAULTS.md](qa/AUDIO_RECOVERY_FAULTS.md). Seven client service-failure cases also passed, including real 60s STT and 25s evaluation timeout waits with mocked APIs; see [SERVICE_FAILURES.md](qa/SERVICE_FAILURES.md). These are not physical-device or production-provider acceptance, and are not counted toward the 50-attempt manual release dataset. Source-only content inventory is documented separately in [CONTENT_INVENTORY.md](qa/CONTENT_INVENTORY.md); it grants no content approval.
