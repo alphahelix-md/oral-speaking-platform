@@ -86,12 +86,14 @@ export function createBudgetOperation(request: Request, accountId: string | unde
   const session = hash(`${subject}:${input.sessionId}`);
   const operation = hash(`${subject}:${input.capability}:${input.operationId}`);
   const operationKey = `{oral-budget}:v1:operation:${operation}`;
+  // Reuse counter identities to correlate attempts without recording raw IDs.
+  const correlation = { subjectHash: subject, sessionHash: session, operation, capability: input.capability };
   const owner = randomUUID(); let attempts = 0;
   const record = async (attempt: number, data: object, signal?: AbortSignal) => {
-    console.info('[PROVIDER_ATTEMPT]', { operation, capability: input.capability, attempt, enforced: Boolean(limits), ...data });
+    console.info('[PROVIDER_ATTEMPT]', { ...correlation, attempt, enforced: Boolean(limits), ...data });
     if (limits) {
       try { await redis(['HSET', operationKey, `attempt_${attempt}`, JSON.stringify(data)], signal); }
-      catch { console.error('[BUDGET_LEDGER_WRITE_FAILED]', { operation, attempt }); }
+      catch { console.error('[BUDGET_LEDGER_WRITE_FAILED]', { ...correlation, attempt }); }
     }
   };
   return {
@@ -101,7 +103,7 @@ export function createBudgetOperation(request: Request, accountId: string | unde
       const attempt = attempts + 1;
       if (attempt > MAX_PROVIDER_ATTEMPTS) throw new BudgetError('BUDGET_LIMIT_REACHED', attempts > 0);
       const startedAt = new Date().toISOString();
-      const meta = { provider, model, startedAt, audioMilliseconds: milliseconds, estimatedMicroUsd: limits?.attemptEstimate ?? null };
+      const meta = { ...correlation, attempt, provider, model, startedAt, audioMilliseconds: milliseconds, estimatedMicroUsd: limits?.attemptEstimate ?? null };
       if (limits) {
         const day = startedAt.slice(0, 10);
         const keys = [operationKey, `{oral-budget}:v1:account:${subject}:${day}`, `{oral-budget}:v1:global:${day}`, `{oral-budget}:v1:session:${session}`];

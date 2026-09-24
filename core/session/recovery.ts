@@ -33,10 +33,12 @@ export function evaluationKey(session: Session): string {
 
 // Checkpoint BEFORE sending and AFTER receiving each chunk. An interrupted request
 // may already have been billed; only never-started chunks can be requested on resume.
+// The response checkpoint is marked so callers can retain received text in memory
+// if durable storage fails. A failure still stops the next request.
 export async function transcribeDraft(
   chunks: File[],
   read: () => AnswerDraft,
-  checkpoint: (changes: Partial<AnswerDraft>) => void,
+  checkpoint: (changes: Partial<AnswerDraft>, receivedResult?: boolean) => void,
   request: (chunk: File, index: number) => Promise<string>,
 ): Promise<string> {
   for (const [index, chunk] of chunks.entries()) {
@@ -49,13 +51,15 @@ export async function transcribeDraft(
     let text: string;
     try { text = await request(chunk, index); }
     catch (error) {
-      if (error instanceof RequestNotSentError) states.splice(index);
-      else states[index] = { status: 'uncertain' };
-      checkpoint({ chunks: states, stage: 'interrupted' });
+      const failed = [...states];
+      if (error instanceof RequestNotSentError) failed.splice(index);
+      else failed[index] = { status: 'uncertain' };
+      checkpoint({ chunks: failed, stage: 'interrupted' });
       throw error;
     }
-    states[index] = { status: 'succeeded', text };
-    checkpoint({ chunks: states, ...(!read().transcriptEdited ? { transcript: states.map(part => part.text || '').join(' ').trim() } : {}) });
+    const completed = [...states];
+    completed[index] = { status: 'succeeded', text };
+    checkpoint({ chunks: completed, ...(!read().transcriptEdited ? { transcript: completed.map(part => part.text || '').join(' ').trim() } : {}) }, true);
   }
   const text = read().chunks.map(part => part.text || '').join(' ').trim();
   if (!text) throw new Error('EMPTY_TRANSCRIPT');

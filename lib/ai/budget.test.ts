@@ -153,3 +153,62 @@ describe('nonblocking completion receipts', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+
+describe('budget receipt correlation', () => {
+  it('links reserved and final receipts to the same counters without exposing original identities', async () => {
+    const { commands } = redis();
+    const accountId = 'private-account-fixture'; const sessionId = 'private-session-fixture'; const operationId = 'private-operation-fixture';
+    await createBudgetOperation(request(), accountId, { ...input, sessionId, operationId }).run('glm', 'fixture', async () => 'ok');
+    const command = commands[0]; const reserved = JSON.parse(command.at(-1)); const final = JSON.parse(commands[1][3]);
+    const identity = { subjectHash: reserved.subjectHash, sessionHash: reserved.sessionHash, operation: reserved.operation, capability: 'transcription', attempt: 1 };
+    for (const name of ['subjectHash', 'sessionHash', 'operation']) expect(reserved[name]).toMatch(/^[a-f0-9]{64}$/);
+    expect(command[3]).toBe(`{oral-budget}:v1:operation:${reserved.operation}`);
+    expect(command[4]).toContain(`:account:${reserved.subjectHash}:`);
+    expect(command[6]).toBe(`{oral-budget}:v1:session:${reserved.sessionHash}`);
+    expect(reserved).toMatchObject({ ...identity, status: 'reserved' });
+    expect(final).toMatchObject({ ...identity, status: 'succeeded' });
+    expect(console.info).toHaveBeenCalledWith('[PROVIDER_ATTEMPT]', expect.objectContaining(identity));
+    const output = JSON.stringify([commands, vi.mocked(console.info).mock.calls]);
+    for (const privateValue of [accountId, sessionId, operationId, 'synthetic-code', 'synthetic-not-a-key']) expect(output).not.toContain(privateValue);
+  });
+  it('groups chunks and evaluation under one session while separating different accounts and sessions', async () => {
+    const { commands } = redis();
+    const cases = [
+      { account: 'first', sessionId: 'one', operationId: 'chunk:0', capability: 'transcription' as const },
+      { account: 'first', sessionId: 'one', operationId: 'chunk:1', capability: 'transcription' as const },
+      { account: 'first', sessionId: 'one', operationId: 'evaluation', capability: 'evaluation' as const },
+      { account: 'first', sessionId: 'two', operationId: 'chunk:0', capability: 'transcription' as const },
+      { account: 'second', sessionId: 'one', operationId: 'chunk:0', capability: 'transcription' as const },
+    ];
+    for (const { account, ...value } of cases) await createBudgetOperation(request(), account, { ...input, ...value }).run('glm', 'fixture', async () => 'ok');
+    const receipts = commands.filter(command => command[0] === 'EVAL').map(command => JSON.parse(command.at(-1)));
+    expect(new Set(receipts.slice(0, 3).map(receipt => receipt.sessionHash)).size).toBe(1);
+    expect(new Set(receipts.slice(0, 3).map(receipt => receipt.operation)).size).toBe(3);
+    expect(receipts[2].capability).toBe('evaluation');
+    expect(receipts[3].sessionHash).not.toBe(receipts[0].sessionHash);
+    expect(receipts[3].subjectHash).toBe(receipts[0].subjectHash);
+    expect(receipts[4].subjectHash).not.toBe(receipts[0].subjectHash);
+    expect(receipts[4].sessionHash).not.toBe(receipts[0].sessionHash);
+  });
+  it('preserves operation and session identity for an uncertain attempt and its retry', async () => {
+    const { commands } = redis(); const operation = createBudgetOperation(request(), 'account', input);
+    await expect(operation.run('glm', 'fixture', async () => { throw new Error('Interrupted'); })).rejects.toThrow('Interrupted');
+    await operation.run('glm', 'fixture', async () => 'ok');
+    const receipts = commands.filter(command => command[0] === 'HSET').map(command => JSON.parse(command[3]));
+    expect(receipts.map(receipt => [receipt.attempt, receipt.status])).toEqual([[1, 'uncertain'], [2, 'succeeded']]);
+    for (const name of ['subjectHash', 'sessionHash', 'operation', 'capability']) expect(receipts[1][name]).toBe(receipts[0][name]);
+  });
+  it('correlates shared-code test sessions without implying an enforced budget or known cost', async () => {
+    vi.stubEnv('RATE_LIMIT_PROVIDER', 'access-code-only'); vi.stubEnv('DEPLOYMENT_STAGE', 'test');
+    const { fetcher } = redis();
+    for (const operationId of ['chunk:0', 'chunk:1']) await createBudgetOperation(request(), undefined, { ...input, operationId }).run('glm', 'fixture', async () => 'ok');
+    const records = vi.mocked(console.info).mock.calls.map(call => call[1]);
+    expect(records[0]).toMatchObject({ enforced: false, estimatedMicroUsd: null, capability: 'transcription' });
+    expect(records[1].sessionHash).toBe(records[0].sessionHash);
+    expect(records[1].subjectHash).toBe(records[0].subjectHash);
+    expect(records[1].operation).not.toBe(records[0].operation);
+    expect(JSON.stringify(records)).not.toContain('synthetic-code');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});

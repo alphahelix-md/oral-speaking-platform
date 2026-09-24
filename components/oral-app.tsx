@@ -135,7 +135,7 @@ const consentCopy: Record<UiLanguage, Record<string, string>> = {
 };
 
 export function OralApp() {
-  const [page, setPage] = useState<Page>('home'); const [language, setLanguage] = useState<LanguageId>('en'); const [mode, setMode] = useState<ModeId>('daily'); const [level, setLevel] = useState('Intermediate'); const [topic, setTopic] = useState('Everyday life');
+  const [page, setPage] = useState<Page>('home'); const pageRef = useRef<Page>(page); const [language, setLanguage] = useState<LanguageId>('en'); const [mode, setMode] = useState<ModeId>('daily'); const [level, setLevel] = useState('Intermediate'); const [topic, setTopic] = useState('Everyday life');
   const [session, setSessionState] = useState<Session | null>(null);
   const sessionRef = useRef<Session | null>(null); const [sessions, setSessions] = useState<Session[]>([]); const [retryExamPart, setRetryExamPart] = useState<1 | 2 | 3 | undefined>(); const [recording, setRecording] = useState(false); const [paused, setPaused] = useState(false); const [seconds, setSeconds] = useState(0);
   const [audio, setAudio] = useState<Blob | null>(null); const [audioUrl, setAudioUrl] = useState(''); const [transcript, setTranscript] = useState(''); const [notice, setNotice] = useState(''); const [operationBusy, setBusy] = useState(false); const [tab, setTab] = useState<'all' | LanguageId>('all');
@@ -158,6 +158,7 @@ export function OralApp() {
   const [originalUrl, setOriginalUrl] = useState('');
   const [audioMetrics, setAudioMetrics] = useState<AudioMetrics | null>(null); const [transcriptResult, setTranscriptResult] = useState<TranscriptResult | null>(null); const [processingStage, setProcessingStage] = useState('');
   const [speechDiagnostic, setSpeechDiagnostic] = useState<SpeechDiagnostic>({}); const speechRequestId = useRef(''); const speechRequestCount = useRef(0);
+  const questionPlaybackId = useRef(0);
   const questionAudioRequest = useRef<{ key: string; promise: Promise<Blob> } | null>(null); const playingQuestionAudio = useRef<HTMLAudioElement | null>(null); const playingQuestionAudioUrl = useRef(''); const automaticallyReadQuestion = useRef('');
   useEffect(() => {
     const refresh = () => setSessions(getSessions());
@@ -222,17 +223,17 @@ export function OralApp() {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [recording, audioSaveFailed, sessionSaveFailed]);
-  useEffect(() => { return () => { if (timer.current) clearInterval(timer.current); recorder.current?.dispose(); playingQuestionAudio.current?.pause(); if (playingQuestionAudioUrl.current) URL.revokeObjectURL(playingQuestionAudioUrl.current); }; }, []);
+  useEffect(() => {
+    window.addEventListener('pagehide', cancelQuestionPlayback);
+    return () => { window.removeEventListener('pagehide', cancelQuestionPlayback); cancelQuestionPlayback(); if (timer.current) clearInterval(timer.current); recorder.current?.dispose(); };
+  }, []);
   useEffect(() => { if (page !== 'speaking' && recording) void finishRecording(); }, [page, recording]);
   useEffect(() => { const raw = originalAudio.current; if (!raw) { setOriginalUrl(''); return; } const url = URL.createObjectURL(raw); setOriginalUrl(url); return () => URL.revokeObjectURL(url); }, [audio]);
   useEffect(() => { if (!audio) { setAudioUrl(''); return; } const url = URL.createObjectURL(audio); setAudioUrl(url); return () => URL.revokeObjectURL(url); }, [audio]);
   useEffect(() => {
+    cancelQuestionPlayback();
     setQuestionVoiceNotice('');
     if (!session || !accessCode) { setQuestionAudioState('idle'); return; }
-    playingQuestionAudio.current?.pause();
-    if (playingQuestionAudioUrl.current) URL.revokeObjectURL(playingQuestionAudioUrl.current);
-    playingQuestionAudio.current = null;
-    playingQuestionAudioUrl.current = '';
     let cancelled = false;
     const input: QuestionAudioInput = { text: session.question, language: session.language, mode: session.mode, level: session.level };
     const key = questionAudioKey(input);
@@ -240,6 +241,7 @@ export function OralApp() {
     void (async () => {
       try {
         const headers = { 'x-beta-access-code': accessCode, ...(await getSupabaseAuthHeaders()) };
+        if (cancelled) return;
         const promise = prepareQuestionAudio(input, headers);
         questionAudioRequest.current = { key, promise };
         await promise;
@@ -249,7 +251,7 @@ export function OralApp() {
       }
     })();
     return () => { cancelled = true; };
-  }, [session?.question, session?.language, session?.mode, session?.level, accessCode]);
+  }, [session?.id, session?.question, session?.language, session?.mode, session?.level, accessCode]);
   const unfinishedSessions = sessions.filter(item => !item.evaluation && item.status !== 'finished');
   const recoveryText = recoveryCopy[uiLanguage];
   const config = languages[language]; const activeMode = modes[mode]; const sessionTurnLimit = mode === 'ielts' ? ieltsPlan(topic).length : activeMode.maxTurns; const stats = getStats(sessions); const currentStats = getStats(sessions, tab === 'all' ? undefined : tab); const text = uiCopy[uiLanguage]; const extra = uiExtra[uiLanguage]; const voice = speechUi[uiLanguage]; const modeText = (id: ModeId) => modeUi[uiLanguage][id] || modes[id]; const studyName = (id: LanguageId) => id === 'en' ? extra.english : extra.japanese; const dateLocale = uiLanguage === 'zh-HK' ? 'zh-HK' : uiLanguage; const shownEvaluation = session?.evaluation?.model === 'demo' ? demoEvaluation(session.language, session.turns, uiLanguage) : session?.evaluation; const quickFeedbackTurn = session?.turns.find(turn => turn.id === quickFeedbackTurnId); const topicLabel = (value: string) => topicUi[uiLanguage][value] || value; const ieltsStageLabel = (part: 1 | 2 | 3) => topicLabel(part === 1 ? IELTS_PART_1 : part === 2 ? IELTS_PART_2 : IELTS_PART_3);
@@ -257,7 +259,9 @@ export function OralApp() {
     window.history.replaceState({ ...window.history.state, oralPage: 'home', oralSettings: false }, '');
     const onPopState = (event: PopStateEvent) => {
       const state = event.state as { oralPage?: Page; oralSettings?: boolean } | null;
-      setPage(state?.oralPage || 'home');
+      cancelQuestionPlayback();
+      pageRef.current = state?.oralPage || 'home';
+      setPage(pageRef.current);
       setSettingsOpen(Boolean(state?.oralSettings));
     };
     window.addEventListener('popstate', onPopState);
@@ -275,7 +279,9 @@ export function OralApp() {
   }, [page, session?.id, session?.question, session?.language, session?.mode, session?.level]);
   function navigate(next: Page) {
     if (next === page) return;
+    cancelQuestionPlayback();
     window.history.pushState({ oralPage: next, oralSettings: false }, '');
+    pageRef.current = next;
     setPage(next);
   }
   function goBack() {
@@ -370,8 +376,26 @@ export function OralApp() {
     setRetryExamPart(undefined);
     navigate('speaking');
   }
-  function speakQuestionLocally(current = session) {
-    if (!('speechSynthesis' in window) || !current) { setQuestionVoiceNotice(questionVoiceUnavailable[uiLanguage]); return; }
+  function cancelQuestionPlayback() {
+    questionPlaybackId.current += 1;
+    playingQuestionAudio.current?.pause();
+    if (playingQuestionAudioUrl.current) URL.revokeObjectURL(playingQuestionAudioUrl.current);
+    playingQuestionAudio.current = null; playingQuestionAudioUrl.current = '';
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+  }
+  function isQuestionPlaybackCurrent(current: Session, playbackId: number): boolean {
+    const active = sessionRef.current;
+    return playbackId === questionPlaybackId.current && pageRef.current === 'speaking'
+      && !recordingActive.current && !recordingLock.current && active?.id === current.id
+      && active.question === current.question && active.language === current.language
+      && active.mode === current.mode && active.level === current.level;
+  }
+  function speakQuestionLocally(current = session, playbackId?: number) {
+    if (!current) return;
+    if (playbackId === undefined) { cancelQuestionPlayback(); playbackId = questionPlaybackId.current; }
+    const requestId = playbackId;
+    if (!isQuestionPlaybackCurrent(current, requestId)) return;
+    if (!('speechSynthesis' in window)) { setQuestionVoiceNotice(questionVoiceUnavailable[uiLanguage]); return; }
     const preferredLocale = current.language === 'en' && current.mode === 'ielts' ? 'en-GB' : languages[current.language].speechLocale;
     const selectedVoice = selectLearningVoice(speechSynthesis.getVoices(), current.language, preferredLocale);
     speechSynthesis.cancel();
@@ -381,7 +405,7 @@ export function OralApp() {
     utterance.rate = current.language === 'ja' ? (current.level === 'Beginner' ? 0.82 : 0.9) : 0.9;
     utterance.pitch = 1.02;
     utterance.volume = 1;
-    utterance.onerror = () => setQuestionVoiceNotice(questionVoiceUnavailable[uiLanguage]);
+    utterance.onerror = () => { if (isQuestionPlaybackCurrent(current, requestId)) setQuestionVoiceNotice(questionVoiceUnavailable[uiLanguage]); };
     setQuestionVoiceNotice('');
     speechSynthesis.resume();
     speechSynthesis.speak(utterance);
@@ -389,6 +413,9 @@ export function OralApp() {
   async function speakQuestion(current: Session | React.MouseEvent<HTMLButtonElement> | null = session, automatic = false) {
     const activeSession = current && 'question' in current ? current : session;
     if (!activeSession) return;
+    cancelQuestionPlayback();
+    const playbackId = questionPlaybackId.current;
+    if (!isQuestionPlaybackCurrent(activeSession, playbackId)) return;
     const input: QuestionAudioInput = { text: activeSession.question, language: activeSession.language, mode: activeSession.mode, level: activeSession.level };
     const key = questionAudioKey(input);
     try {
@@ -397,10 +424,12 @@ export function OralApp() {
         setQuestionAudioState('loading');
         setQuestionVoiceNotice(questionVoicePreparing[uiLanguage]);
         const headers = { ...(accessCode ? { 'x-beta-access-code': accessCode } : {}), ...(await getSupabaseAuthHeaders()) };
+        if (!isQuestionPlaybackCurrent(activeSession, playbackId)) return;
         pending = prepareQuestionAudio(input, headers);
         questionAudioRequest.current = { key, promise: pending };
       }
       const blob = await pending;
+      if (!isQuestionPlaybackCurrent(activeSession, playbackId)) return;
       setQuestionAudioState('ready');
       setQuestionVoiceNotice('');
       playingQuestionAudio.current?.pause();
@@ -414,9 +443,10 @@ export function OralApp() {
       player.onerror = cleanup;
       try { await player.play(); } catch (error) { cleanup(); throw error; }
     } catch {
+      if (!isQuestionPlaybackCurrent(activeSession, playbackId)) return;
       setQuestionAudioState('fallback');
       setQuestionVoiceNotice(automatic ? questionVoiceUnavailable[uiLanguage] : questionVoiceFallback[uiLanguage]);
-      speakQuestionLocally(activeSession);
+      speakQuestionLocally(activeSession, playbackId);
     }
   }
   async function beginRecording() {
@@ -426,8 +456,7 @@ export function OralApp() {
   async function startRecordingNow() {
     if (recordingActive.current || recordingLock.current || analysisLock.current || busy || restoring || !sessionRef.current?.draft) return;
     recordingLock.current = true; setBusy(true);
-    playingQuestionAudio.current?.pause();
-    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    cancelQuestionPlayback();
     speechRequestId.current = '';
     speechRequestCount.current = 0;
     setSpeechDiagnostic({
@@ -473,12 +502,28 @@ export function OralApp() {
     const turnId = sessionRef.current.draft.turnId;
     const requestId = `sp_${sessionRef.current.draft.audioId?.replace(/-/g, '')}_v1`;
     speechRequestId.current = requestId;
+    let receivedCheckpointFailed = false;
     try {
       const chunks = await recordedAudioToWavChunks(blob, measuredDurationSeconds);
       if (!chunks.length) throw new Error('EMPTY_AUDIO');
       const text = await transcribeDraft(chunks,
         () => { if (sessionRef.current?.draft?.turnId !== turnId) throw new Error('DRAFT_CHANGED'); return sessionRef.current.draft; },
-        changes => { patchDraft(changes, true); if (changes.transcript !== undefined) setTranscript(changes.transcript); },
+        (changes, receivedResult) => {
+          if (sessionRef.current?.draft?.turnId !== turnId) throw new Error('DRAFT_CHANGED');
+          try { patchDraft(changes, true); }
+          catch (error) {
+            // Keep received work available for editing/export without allowing the next paid chunk.
+            if (receivedResult) {
+              receivedCheckpointFailed = true;
+              const current = sessionRef.current;
+              const retained = { ...current, draft: { ...current.draft!, ...changes } };
+              sessionRef.current = retained; setSessionState(retained);
+              if (changes.transcript !== undefined) setTranscript(changes.transcript);
+            }
+            throw error;
+          }
+          if (changes.transcript !== undefined) setTranscript(changes.transcript);
+        },
         async (chunk, index) => {
         speechRequestCount.current += 1;
         const form = new FormData();
@@ -511,7 +556,10 @@ export function OralApp() {
       setSpeechDiagnostic(previous => ({ ...previous, uploadStatus: 'complete', errorCode: undefined }));
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'TRANSCRIPTION_FAILED';
-      if (browserFallbackText) {
+      if (receivedCheckpointFailed) {
+        setNotice(extra.saveFailed);
+        patchDraft({ stage: 'interrupted' });
+      } else if (browserFallbackText) {
         const result = { text: browserFallbackText, language, provider: 'browser-speech-recognition' };
         setTranscript(browserFallbackText); setTranscriptResult(result);
         patchDraft({ transcript: browserFallbackText, transcriptResult: result, stage: 'ready' });

@@ -12,6 +12,14 @@ Account/site counters use UTC dates, with two-day retention. Session counters an
 
 Without configured account auth, one access code shares one allowance. IP changes cannot reset that code's bucket. Session IDs are client supplied; account and global caps remain authoritative even if a client invents new Session IDs.
 
+## Session-level reconciliation
+
+New reservations, completion receipts and `[PROVIDER_ATTEMPT]` logs include `subjectHash`, `sessionHash`, `operation`, `capability` and `attempt`. These reuse the existing SHA-256 counter identities; no raw account ID, access code, Session ID or operation ID is added. The same Session hash links its STT chunks and evaluation. Different authenticated accounts remain separate even if their supplied Session IDs match. Without account auth, the subject is the shared access code, not an individual user.
+
+Group attempts by `sessionHash` and capability, and deduplicate observations by `(operation, attempt)` before counting or summing audio milliseconds and estimated reserves. A reservation and its final receipt are two observations of one attempt; a retry has a different attempt number and consumes its own budget. Keep `reserved`/`uncertain` attempts in the accounting until reconciled: they are not evidence of zero cost. These stable hashes are pseudonymous correlation identifiers, not anonymous data; retain the same restricted log access.
+
+Earlier receipts lack these fields and are not backfilled. In unmetered test mode only console records are emitted, `enforced` remains false and estimated cost remains null. A process termination can prevent the completion log, and a final ledger write can fail; the enforced-mode reservation remains authoritative. This metadata permits grouping available records but does not provide invoice reconciliation, actual token usage, verified prices, new retention guarantees or a production daily hard cap. Those checks still require dedicated Redis acceptance and provider billing evidence.
+
 ## Deadline and retry contract
 
 The shared maximum is two actual provider attempts, including any future approved fallback. With no fallback configured, the primary can retry once. If an approved fallback is later configured, it takes the second slot; there is no third slot. No fallback is enabled by this change.

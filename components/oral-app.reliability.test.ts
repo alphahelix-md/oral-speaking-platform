@@ -36,7 +36,7 @@ function context(initial?: Session) {
   const env: Record<string, any> = {
     session, sessionRef: ref, busy: false, restoring: false,
     submitLock: { current: false }, evaluationLock: { current: false }, analysisLock: { current: false }, stopLock: { current: false },
-    recording: true, recordingActive: { current: true }, recordingInterruptedCopy: { en: 'Recording interrupted' }, recorder: { current: null }, browserTranscriber: { current: null }, timer: { current: null },
+    recording: true, recordingActive: { current: true }, recordingLock: { current: false }, recordingInterruptedCopy: { en: 'Recording interrupted' }, recorder: { current: null }, browserTranscriber: { current: null }, timer: { current: null },
     originalAudio: { current: null }, language: 'en', mode: 'daily', uiLanguage: 'en', accessCode: '', authUser: null, trainingConsent: 'unset',
     speechRequestId: { current: '' }, sessionTurnLimit: 5, voice: { analyzing: 'analyzing', empty: 'empty', short: 'short', evaluating: 'evaluating' },
     extra: { saveFailed: 'Save failed', recordFailed: 'Record failed' },
@@ -48,7 +48,7 @@ function context(initial?: Session) {
     getSupabaseAuthHeaders: vi.fn().mockResolvedValue({}), fetchJsonWithTimeout: vi.fn(),
     unavailableEvaluation, unavailableReviewCopy: { en: { notice: 'No score' } },
   };
-  for (const key of ['busy','notice','sessionSaveFailed','audioSaveFailed','audio','audioMetrics','transcriptResult','pendingAudioId','transcript','seconds','retryExamPart','quickFeedbackTurnId','recording','paused','processingStage','speechDiagnostic']) {
+  for (const key of ['sessionState','busy','notice','sessionSaveFailed','audioSaveFailed','audio','audioMetrics','transcriptResult','pendingAudioId','transcript','seconds','retryExamPart','quickFeedbackTurnId','recording','paused','processingStage','speechDiagnostic']) {
     env['set' + key[0].toUpperCase() + key.slice(1)] = (value: unknown) => { state[key] = typeof value === 'function' ? (value as Function)(state[key]) : value; };
   }
   env.persistSession = (next: Session) => {
@@ -232,7 +232,8 @@ describe('interrupted draft recovery with question playback', () => {
       stage: 'transcribing', chunks: text ? [{ status: 'succeeded', text }, { status: 'running' }] : [{ status: 'running' }] };
     c.env.persistSession(c.ref.current);
     Object.assign(c.env, {
-      recording: false, sessionSaveFailed: false, audioSaveFailed: false,
+      recording: false, recordingActive: { current: false }, sessionSaveFailed: false, audioSaveFailed: false,
+      pageRef: { current: 'speaking' }, questionPlaybackId: { current: 0 },
       getSessions, recoverSession, getPlaybackAudio: vi.fn().mockResolvedValue(new Blob(['playback'])),
       recoveryText: { interrupted: 'Processing interrupted', empty: 'No transcript saved; keep audio or type', partial: 'Saved text retained; complete manually' },
       questionAudioKey: () => 'question', questionAudioRequest: { current: { key: 'question', promise: Promise.resolve(new Blob(['question audio'])) } },
@@ -244,10 +245,13 @@ describe('interrupted draft recovery with question playback', () => {
     for (const key of ['restoring', 'sessionState', 'language', 'mode', 'level', 'topic', 'questionAudioState', 'questionVoiceNotice']) {
       c.env['set' + key[0].toUpperCase() + key.slice(1)] = (value: unknown) => { c.state[key] = value; };
     }
+    c.env.cancelQuestionPlayback = handler('cancelQuestionPlayback', c.env);
+    c.env.isQuestionPlaybackCurrent = handler('isQuestionPlaybackCurrent', c.env);
     return c;
   }
   it('explains an empty interrupted transcript and retains the notice after cloud autoplay', async () => {
     const c = restoredDraft();
+    vi.stubGlobal('window', {});
     vi.stubGlobal('Audio', class { play = vi.fn().mockResolvedValue(undefined); });
     await handler('openSession', c.env)(getSessions()[0]);
     expect(c.state.notice).toBe(c.env.recoveryText.empty);
@@ -276,5 +280,131 @@ describe('interrupted draft recovery with question playback', () => {
     expect(c.state.audioSaveFailed).toBe(true);
     expect(c.state.notice).toBe(c.env.recoveryText.interrupted);
     expect(c.env.getPlaybackAudio).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('received transcription after storage failure', () => {
+  function transcribing() {
+    const c = context();
+    c.ref.current.draft = { ...c.ref.current.draft!, audioId: 'raw', audioStatus: 'verified' };
+    c.env.persistSession(c.ref.current);
+    Object.assign(c.env, {
+      transcribeDraft, RequestNotSentError,
+      recordedAudioToWavChunks: vi.fn().mockResolvedValue([new File(['first'], 'first.wav'), new File(['second'], 'second.wav')]),
+      speechRequestCount: { current: 0 }, speechErrors: { en: { transcriptionFailed: 'Transcription failed' } }, recoveryText: { interrupted: 'Keep editing' },
+    });
+    return c;
+  }
+  it('keeps returned text in the editor and exportable draft, then stops before the next chunk', async () => {
+    const c = transcribing();
+    c.env.fetchJsonWithTimeout.mockImplementation(async () => {
+      storage.setItem.mockImplementation(() => { throw new Error('Storage full'); });
+      return { response: { ok: true, status: 200 }, data: { text: 'Received first chunk' } };
+    });
+    await handler('analyzeAudio', c.env)(new Blob(['raw']), 90, 'Older browser fallback');
+    expect(c.env.fetchJsonWithTimeout).toHaveBeenCalledOnce();
+    expect(c.state.transcript).toBe('Received first chunk'); expect(c.state.notice).toBe('Save failed');
+    expect(c.ref.current.draft).toMatchObject({ transcript: 'Received first chunk', chunks: [{ status: 'succeeded', text: 'Received first chunk' }] });
+    expect(c.state.sessionSaveFailed).toBe(true);
+    expect(c.state.busy).toBe(false);
+    expect(getSessions()[0].draft).toMatchObject({ transcript: '', chunks: [{ status: 'running' }] });
+    storage.setItem.mockImplementation((key, value) => values.set(key, value));
+    c.env.persistSession(c.ref.current);
+    expect(getSessions()[0].draft?.transcript).toBe('Received first chunk');
+  });
+  it('preserves manual corrections when a received result cannot be saved', async () => {
+    const c = transcribing(); c.ref.current.draft!.transcript = 'My correction'; c.ref.current.draft!.transcriptEdited = true;
+    c.state.transcript = 'My correction'; c.env.persistSession(c.ref.current);
+    c.env.fetchJsonWithTimeout.mockImplementation(async () => {
+      storage.setItem.mockImplementation(() => { throw new Error('Storage full'); });
+      return { response: { ok: true, status: 200 }, data: { text: 'Provider words' } };
+    });
+    await handler('analyzeAudio', c.env)(new Blob(['raw']), 90);
+    expect(c.state.transcript).toBe('My correction'); expect(c.ref.current.draft?.transcript).toBe('My correction');
+    expect(c.ref.current.draft?.chunks[0]).toEqual({ status: 'succeeded', text: 'Provider words' });
+    expect(c.env.fetchJsonWithTimeout).toHaveBeenCalledOnce(); expect(c.state.sessionSaveFailed).toBe(true);
+  });
+  it('still refuses a provider request when its initial durable claim fails', async () => {
+    const c = transcribing(); storage.setItem.mockImplementation(() => { throw new Error('Storage full'); });
+    await handler('analyzeAudio', c.env)(new Blob(['raw']), 90);
+    expect(c.env.fetchJsonWithTimeout).not.toHaveBeenCalled();
+    expect(c.ref.current.draft?.chunks).toEqual([]); expect(c.state.sessionSaveFailed).toBe(true);
+  });
+});
+
+describe('question audio lifecycle', () => {
+  function playback() {
+    const c = context();
+    let resolve!: (blob: Blob) => void; let reject!: (error: Error) => void;
+    const pending = new Promise<Blob>((yes, no) => { resolve = yes; reject = no; });
+    const play = vi.fn().mockResolvedValue(undefined); const pause = vi.fn(); const local = vi.fn();
+    const speech = { cancel: vi.fn(), resume: vi.fn(), speak: vi.fn(), getVoices: () => [] };
+    vi.stubGlobal('window', { speechSynthesis: speech, history: { pushState: vi.fn() } });
+    vi.stubGlobal('speechSynthesis', speech);
+    vi.stubGlobal('navigator', { userAgent: 'Test browser' });
+    vi.stubGlobal('MediaRecorder', class { static isTypeSupported() { return true; } });
+    vi.stubGlobal('Audio', class { play = play; pause = pause; });
+    Object.assign(c.env, {
+      recordingActive: { current: false }, recording: false, page: 'speaking', pageRef: { current: 'speaking' }, questionPlaybackId: { current: 0 },
+      questionAudioKey: (s: { text: string }) => s.text, questionAudioRequest: { current: { key: c.ref.current.question, promise: pending } },
+      playingQuestionAudio: { current: null }, playingQuestionAudioUrl: { current: '' },
+      setQuestionAudioState: vi.fn(), setQuestionVoiceNotice: vi.fn(), setPage: vi.fn(),
+      questionVoiceUnavailable: { en: 'Unavailable' }, questionVoiceFallback: { en: 'Local' }, questionVoicePreparing: { en: 'Preparing' },
+      speakQuestionLocally: local, speechRequestCount: { current: 0 },
+      AudioRecorder: class { start() { return Promise.reject(new Error('Permission cancelled')); } dispose() {} },
+    });
+    c.env.cancelQuestionPlayback = handler('cancelQuestionPlayback', c.env);
+    c.env.isQuestionPlaybackCurrent = handler('isQuestionPlaybackCurrent', c.env);
+    const speak = handler('speakQuestion', c.env);
+    return { ...c, resolve, reject, play, pause, local, speak };
+  }
+  it.each(['success', 'failure'] as const)('does not play or fall back after recording begins and pending TTS resolves with %s', async result => {
+    const c = playback(); const pending = c.speak(c.ref.current, true);
+    await handler('startRecordingNow', c.env)();
+    if (result === 'success') c.resolve(new Blob(['voice'])); else c.reject(new Error('TTS failed'));
+    await pending;
+    expect(c.play).not.toHaveBeenCalled(); expect(c.local).not.toHaveBeenCalled();
+  });
+  it.each(['success', 'failure'] as const)('does not play or fall back after leaving the practice, pending TTS %s', async result => {
+    const c = playback(); const pending = c.speak(c.ref.current, true);
+    await handler('navigate', c.env)('home');
+    if (result === 'success') c.resolve(new Blob(['voice'])); else c.reject(new Error('TTS failed'));
+    await pending;
+    expect(c.play).not.toHaveBeenCalled(); expect(c.local).not.toHaveBeenCalled();
+  });
+  it('ignores an old question response even before the changed-question effect runs', async () => {
+    const c = playback(); const pending = c.speak(c.ref.current, true);
+    c.ref.current = { ...c.ref.current, question: 'Different question' };
+    c.resolve(new Blob(['old question'])); await pending;
+    expect(c.play).not.toHaveBeenCalled(); expect(c.local).not.toHaveBeenCalled();
+  });
+  it('only plays the most recent request when two play actions share pending audio', async () => {
+    const c = playback(); const first = c.speak(c.ref.current, true); const second = c.speak(c.ref.current, false);
+    c.resolve(new Blob(['voice'])); await Promise.all([first, second]);
+    expect(c.play).toHaveBeenCalledOnce(); expect(c.local).not.toHaveBeenCalled();
+    c.env.playingQuestionAudio.current.onended();
+  });
+  it('does not fall back when playback rejection arrives after navigation', async () => {
+    const c = playback(); let rejectPlay!: (reason: Error) => void;
+    c.play.mockImplementation(() => new Promise((_, reject) => { rejectPlay = reject; }));
+    const pending = c.speak(c.ref.current, true); c.resolve(new Blob(['voice'])); await Promise.resolve();
+    expect(c.play).toHaveBeenCalledOnce();
+    await handler('navigate', c.env)('home'); rejectPlay(new Error('Playback cancelled')); await pending;
+    expect(c.local).not.toHaveBeenCalled(); expect(c.pause).toHaveBeenCalledOnce();
+  });
+  it('keeps normal local fallback when the active question audio fails', async () => {
+    const c = playback(); const pending = c.speak(c.ref.current, false);
+    c.reject(new Error('TTS unavailable')); await pending;
+    expect(c.local).toHaveBeenCalledWith(c.ref.current, c.env.questionPlaybackId.current);
+  });
+  it('does not send a late TTS preparation after auth headers arrive for a cancelled request', async () => {
+    const c = playback(); c.env.questionAudioRequest.current = null;
+    let finishHeaders!: (headers: object) => void;
+    c.env.getSupabaseAuthHeaders.mockImplementation(() => new Promise(resolve => { finishHeaders = resolve; }));
+    c.env.prepareQuestionAudio = vi.fn().mockResolvedValue(new Blob(['voice']));
+    const pending = handler('speakQuestion', c.env)(c.ref.current, true);
+    await handler('navigate', c.env)('home'); finishHeaders({}); await pending;
+    expect(c.env.prepareQuestionAudio).not.toHaveBeenCalled(); expect(c.play).not.toHaveBeenCalled(); expect(c.local).not.toHaveBeenCalled();
   });
 });
