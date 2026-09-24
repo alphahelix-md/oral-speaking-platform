@@ -766,7 +766,7 @@ export function OralApp() {
     if (sessionRef.current && selected.has(sessionRef.current.id)) { setSession(null); originalAudio.current = null; setAudio(null); setTranscript(''); setAudioSaveFailed(false); setSessionSaveFailed(false); }
   }
 
-  return <div className={'app-shell ' + (questionBlurred ? 'questions-blurred' : '')}><div className="app-frame">
+  return <div className={'app-shell ' + (questionBlurred ? 'questions-blurred' : '')}><div className="app-frame" data-page={page}>
     {page !== 'speaking' && page !== 'result' && <header className="topbar"><div className="brand"><span className="brand-mark"><AudioLines size={20} strokeWidth={2.5} /></span><span>oral<span className="brand-dot">.</span></span></div><div className="topbar-tools"><span className="topbar-caption">{text.studio}</span></div></header>}
     {sessionWriteStatus !== 'ready' && <div className="notice" role="status">{sessionWriteStatus === 'waiting'
       ? { 'zh-CN': '正在等待练习窗口。若已在另一窗口打开 Oral，请先关闭那个窗口；这里会自动恢复。', en: 'Waiting for the practice window. If Oral is open in another window, close that window; this one will become ready automatically.', 'zh-HK': '正在等候練習視窗。若已在另一視窗開啟 Oral，請先關閉該視窗；這裏會自動恢復。', ja: '練習ウィンドウを待っています。別のウィンドウで Oral を開いている場合は閉じてください。この画面は自動的に再開します。' }[uiLanguage]

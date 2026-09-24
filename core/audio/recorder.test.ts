@@ -81,3 +81,26 @@ describe('recording completion events', () => {
     resolve({ getTracks: () => [{ stop }] }); await expect(start).rejects.toThrow('cancelled'); expect(stop).toHaveBeenCalledOnce();
   });
 });
+
+
+describe('recording format compatibility', () => {
+  it('records and preserves MP4 when WebM is unavailable, as on older Safari', async () => {
+    const stopTrack = vi.fn(); let recorder: SafariRecorder;
+    class SafariRecorder {
+      static isTypeSupported = (type: string) => type === 'audio/mp4';
+      state: RecordingState = 'inactive'; mimeType: string;
+      ondataavailable?: (event: { data: Blob }) => void; onstop?: () => void;
+      constructor(_stream: unknown, options?: MediaRecorderOptions) {
+        expect(options?.mimeType).toBe('audio/mp4'); this.mimeType = options!.mimeType!; recorder = this;
+      }
+      start() { this.state = 'recording'; }
+      stop() { this.state = 'inactive'; this.ondataavailable?.({ data: new Blob(['original-mp4'], { type: this.mimeType }) }); this.onstop?.(); }
+    }
+    vi.stubGlobal('navigator', { userAgent: 'iPhone', mediaDevices: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: stopTrack }] }) } });
+    vi.stubGlobal('window', { MediaRecorder: SafariRecorder }); vi.stubGlobal('MediaRecorder', SafariRecorder);
+    const capture = new AudioRecorder(); await capture.start();
+    expect(recorder!.state).toBe('recording'); const result = await capture.stop();
+    expect(result.blob.type).toBe('audio/mp4'); expect(await result.blob.text()).toBe('original-mp4');
+    expect(stopTrack).toHaveBeenCalledOnce();
+  });
+});
