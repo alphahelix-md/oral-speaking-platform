@@ -62,7 +62,7 @@ export async function saveOriginalAudio(id: string, audio: Blob, metadata: Omit<
   if (!audio.size) throw new Error('EMPTY_AUDIO');
   const sha256 = await digest(audio);
   await saveAudio(id, audio, { ...metadata, kind: 'original', sha256, originalByteLength: audio.size, originalMimeType: audio.type });
-  const stored = await getAudio(id);
+  const stored = await getVerifiedAudio(id);
   if (!stored || stored.size !== audio.size || stored.type !== audio.type || await digest(stored) !== sha256) {
     throw new Error('AUDIO_READBACK_MISMATCH');
   }

@@ -12,14 +12,17 @@ export function saveSession(session: Session): Session {
   if (localStorage.getItem(KEY) !== value) throw new Error('SESSION_READBACK_MISMATCH');
   return saved;
 }
-function readSessions(): Session[] {
+export function readSessions(): Session[] {
   const value = JSON.parse(localStorage.getItem(KEY) || '[]');
   if (!Array.isArray(value) || value.some(item => !item || typeof item.id !== 'string' || typeof item.question !== 'string' || !['en', 'ja'].includes(item.language) || !Array.isArray(item.turns))) throw new Error('SESSION_STORAGE_INVALID');
   return value as Session[];
 }
 export function deleteSessions(ids: string[]): void {
   const selected = new Set(ids);
-  localStorage.setItem(KEY, JSON.stringify(getSessions().filter(session => !selected.has(session.id))));
+  if (!selected.size) return;
+  const value = JSON.stringify(readSessions().filter(session => !selected.has(session.id)));
+  localStorage.setItem(KEY, value);
+  if (localStorage.getItem(KEY) !== value) throw new Error('SESSION_READBACK_MISMATCH');
 }
 export function getStats(sessions: Session[], language?: Session['language']) {
   const selected = language ? sessions.filter(s => s.language === language) : sessions;

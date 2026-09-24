@@ -33,7 +33,7 @@ function context(initial?: Session) {
   const env: Record<string, any> = {
     session, sessionRef: ref, busy: false, restoring: false,
     submitLock: { current: false }, evaluationLock: { current: false }, analysisLock: { current: false }, stopLock: { current: false },
-    recording: true, recorder: { current: null }, browserTranscriber: { current: null }, timer: { current: null },
+    recording: true, recordingActive: { current: true }, recordingInterruptedCopy: { en: 'Recording interrupted' }, recorder: { current: null }, browserTranscriber: { current: null }, timer: { current: null },
     originalAudio: { current: null }, language: 'en', mode: 'daily', uiLanguage: 'en', accessCode: '', authUser: null, trainingConsent: 'unset',
     speechRequestId: { current: '' }, sessionTurnLimit: 5, voice: { analyzing: 'analyzing', empty: 'empty', short: 'short', evaluating: 'evaluating' },
     extra: { saveFailed: 'Save failed', recordFailed: 'Record failed' },
@@ -109,6 +109,16 @@ describe('production stop recording handler', () => {
     expect(c.ref.current.draft?.audioStatus).toBe('verified'); expect(c.state.audioSaveFailed).toBe(false);
     expect(c.env.analyzeAudio).toHaveBeenCalledWith(c.raw, 4, undefined);
   });
+  it('saves system-ended audio and lets the user inspect it before STT', async () => {
+    const c = recorded();
+    c.env.recording = false; // The callback may precede React's next render.
+    c.env.recorder.current.stop.mockResolvedValue({ blob: c.raw, seconds: 4, metrics: { durationSeconds: 4 }, interrupted: true });
+    await handler('finishRecording', c.env)();
+    expect(c.env.saveOriginalAudio).toHaveBeenCalledOnce();
+    expect(getSessions()[0].draft).toMatchObject({ audioStatus: 'verified', stage: 'interrupted' });
+    expect(c.env.analyzeAudio).not.toHaveBeenCalled(); expect(c.state.notice).toBe('Recording interrupted');
+    expect(c.env.recordingActive.current).toBe(false);
+  });
   it('keeps downloadable original and stops before decoding or STT on write failure', async () => {
     const c = recorded(); c.env.saveOriginalAudio.mockRejectedValue(new Error('Full'));
     await handler('finishRecording', c.env)();
@@ -151,5 +161,15 @@ describe('production evaluation handler', () => {
     const c = answered(); storage.setItem.mockImplementation(() => { throw new Error('Full'); });
     await handler('finishSession', c.env)();
     expect(c.env.fetchWithTimeout).not.toHaveBeenCalled(); expect(c.state.sessionSaveFailed).toBe(true);
+  });
+});
+
+describe('production record deletion handler', () => {
+  it('does not delete audio when stored history cannot be read safely', async () => {
+    const c = context(); c.env.recording = false; c.env.sessionSaveFailed = false; c.env.audioSaveFailed = false;
+    c.env.readSessions = vi.fn().mockImplementation(() => { throw new Error('Corrupt history'); });
+    c.env.deleteAudioMany = vi.fn(); c.env.deleteSessions = vi.fn();
+    await expect(handler('learningRecordsDeleted', c.env)(['selected'])).rejects.toThrow('Corrupt history');
+    expect(c.env.deleteAudioMany).not.toHaveBeenCalled(); expect(c.env.deleteSessions).not.toHaveBeenCalled();
   });
 });

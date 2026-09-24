@@ -5,7 +5,7 @@ import { languages } from '@/languages';
 import { uiExtra, modeUi, topicUi, levelUi, scoreUi } from '@/lib/ui-translations';
 import { modes } from '@/training/config';
 import { createDraft, createSession, speakingReducer } from '@/core/speaking/engine';
-import { deleteSessions, getSessions, getStats, saveSession } from '@/core/session/storage';
+import { deleteSessions, getSessions, getStats, readSessions, saveSession } from '@/core/session/storage';
 import { commitDraft, evaluationKey, recoverSession, RequestNotSentError, transcribeDraft } from '@/core/session/recovery';
 import { readPreference, writePreference } from '@/core/session/preferences';
 import { downloadPracticeBackup } from '@/core/session/export';
@@ -68,6 +68,12 @@ const recordingStateCopy = {
   ja: { text: '文字のみの練習・録音なし', deleted: '録音は削除されました', skipped: '未文字起こし・元音声を保存', partial: '文字起こしは一部のみ・元音声を保存' },
 };
 const exportCopy: Record<UiLanguage, string> = { 'zh-CN': '导出文字与草稿（录音请另行下载）', en: 'Export text and draft (download audio separately)', 'zh-HK': '匯出文字與草稿（錄音請另外下載）', ja: '文字と下書きを保存（音声は別途ダウンロード）' };
+const recordingInterruptedCopy: Record<UiLanguage, string> = {
+  'zh-CN': '录音被系统中断。收到的原始音频已保存，请先回放检查；可重新分析、编辑文字或保留录音继续。',
+  en: 'Recording was interrupted. The audio received has been saved. Play it back to check, then analyze, edit the text, or keep the audio and continue.',
+  'zh-HK': '錄音被系統中斷。收到的原始音訊已儲存，請先回放檢查；可重新分析、編輯文字或保留錄音繼續。',
+  ja: '録音が中断されました。受け取った元の音声は保存しました。再生して確認し、再解析、文字の編集、または音声を残して続行できます。',
+};
 const recoveryCopy = {
   'zh-CN': { resume: '恢复未完成练习', skip: '保留录音，跳过转写', interrupted: '处理曾中断。已保存内容已恢复；未确认的请求不会自动重发。可编辑文字，或保留录音继续。正在录制时关闭页面的声音可能未保存。' },
   en: { resume: 'Resume unfinished practice', skip: 'Keep audio and skip transcript', interrupted: 'Processing was interrupted. Saved content is restored; unconfirmed requests will not be sent again. Edit the text or keep the audio and continue. Audio still being recorded when the page closed may be missing.' },
@@ -145,6 +151,7 @@ export function OralApp() {
   const [quickFeedbackTurnId, setQuickFeedbackTurnId] = useState<string | null>(null);
   const recorder = useRef<AudioRecorder | null>(null); const browserTranscriber = useRef<BrowserTranscriber | null>(null); const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingLock = useRef(false); const stopLock = useRef(false); const analysisLock = useRef(false); const submitLock = useRef(false); const evaluationLock = useRef(false);
+  const recordingActive = useRef(false);
   const originalAudio = useRef<Blob | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [originalUrl, setOriginalUrl] = useState('');
@@ -206,7 +213,7 @@ export function OralApp() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [recording, audioSaveFailed, sessionSaveFailed]);
   useEffect(() => { return () => { if (timer.current) clearInterval(timer.current); recorder.current?.dispose(); playingQuestionAudio.current?.pause(); if (playingQuestionAudioUrl.current) URL.revokeObjectURL(playingQuestionAudioUrl.current); }; }, []);
-  useEffect(() => { if (page !== 'speaking' && recording) void finishRecording(); }, [page]);
+  useEffect(() => { if (page !== 'speaking' && recording) void finishRecording(); }, [page, recording]);
   useEffect(() => { const raw = originalAudio.current; if (!raw) { setOriginalUrl(''); return; } const url = URL.createObjectURL(raw); setOriginalUrl(url); return () => URL.revokeObjectURL(url); }, [audio]);
   useEffect(() => { if (!audio) { setAudioUrl(''); return; } const url = URL.createObjectURL(audio); setAudioUrl(url); return () => URL.revokeObjectURL(url); }, [audio]);
   useEffect(() => {
@@ -405,7 +412,7 @@ export function OralApp() {
     await startRecordingNow();
   }
   async function startRecordingNow() {
-    if (recordingLock.current || analysisLock.current || busy || restoring || !sessionRef.current?.draft) return;
+    if (recordingActive.current || recordingLock.current || analysisLock.current || busy || restoring || !sessionRef.current?.draft) return;
     recordingLock.current = true; setBusy(true);
     playingQuestionAudio.current?.pause();
     if ('speechSynthesis' in window) speechSynthesis.cancel();
@@ -422,9 +429,10 @@ export function OralApp() {
     setProcessingStage(voice.permission);
     try {
       patchDraft({ stage: 'recording' }, true);
-      const next = new AudioRecorder(language);
-      await next.start();
+      const next = new AudioRecorder(language, () => { void finishRecording(); });
       recorder.current = next;
+      await next.start();
+      recordingActive.current = true;
       setAudio(null); setAudioMetrics(null); setTranscriptResult(null); setTranscript(''); setSeconds(0); setPendingAudioId(null); setAudioSaveFailed(false); originalAudio.current = null;
       patchDraft({ ...createDraft(sessionRef.current?.draft?.examPart), turnId: sessionRef.current!.draft!.turnId, audioId: undefined, audioStatus: undefined, audioMetrics: undefined, transcriptResult: undefined, transcriptEdited: false, stage: 'recording' }, true);
       const freeTranscriber = new BrowserTranscriber();
@@ -442,7 +450,7 @@ export function OralApp() {
     } catch (error) {
       setNotice(error instanceof DOMException && error.name === 'NotAllowedError' ? extra.micUnavailable : extra.recordFailed);
       setSpeechDiagnostic(previous => ({ ...previous, errorCode: error instanceof Error ? error.name : 'RECORDING_START_FAILED' }));
-      recorder.current?.dispose(); recorder.current = null;
+      recorder.current?.dispose(); recorder.current = null; recordingActive.current = false;
       if (sessionRef.current?.draft) patchDraft({ stage: 'interrupted' });
     } finally { setBusy(false); setProcessingStage(''); recordingLock.current = false; }
   }
@@ -510,8 +518,8 @@ export function OralApp() {
     }
   }
   async function finishRecording() {
-    if (!recorder.current || stopLock.current || analysisLock.current || !recording) return;
-    stopLock.current = true;
+    if (!recorder.current || stopLock.current || analysisLock.current || !recordingActive.current) return;
+    stopLock.current = true; recordingActive.current = false;
     speechRequestId.current = `sp_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
     setSpeechDiagnostic(previous => ({ ...previous, requestId: speechRequestId.current, uploadStatus: 'recording stopped' }));
     if (timer.current) clearInterval(timer.current);
@@ -535,6 +543,11 @@ export function OralApp() {
         setAudioSaveFailed(false);
       } catch {
         setAudioSaveFailed(true); patchDraft({ audioStatus: 'failed' }); return;
+      }
+      if (result.interrupted) {
+        patchDraft({ stage: 'interrupted' }, true);
+        setNotice(recordingInterruptedCopy[uiLanguage]);
+        return;
       }
       let stableAudio = result.blob;
       try {
@@ -668,8 +681,9 @@ export function OralApp() {
   async function learningRecordsDeleted(ids: string[]) {
     if (busy || recording || restoring || sessionSaveFailed || audioSaveFailed) throw new Error('PRACTICE_IN_PROGRESS');
     const selected = new Set(ids);
-    const deleted = getSessions().filter(item => selected.has(item.id));
-    const remaining = getSessions().filter(item => !selected.has(item.id));
+    const history = readSessions();
+    const deleted = history.filter(item => selected.has(item.id));
+    const remaining = history.filter(item => !selected.has(item.id));
     const audioIds = new Set(deleted.flatMap(item => [...item.turns.map(turn => turn.audioId), item.draft?.audioId].filter((id): id is string => Boolean(id))));
     const stillReferenced = new Set(remaining.flatMap(item => [...item.turns.map(turn => turn.audioId), item.draft?.audioId].filter((id): id is string => Boolean(id))));
     await deleteAudioMany([...audioIds].filter(id => !stillReferenced.has(id)));

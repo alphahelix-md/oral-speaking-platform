@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSession, speakingReducer } from '@/core/speaking/engine';
 import { commitDraft, recoverSession, RequestNotSentError, transcribeDraft } from './recovery';
-import { getSessions, saveSession } from './storage';
+import { deleteSessions, getSessions, saveSession } from './storage';
 import type { AnswerDraft, Session } from '@/types/speaking';
 
 let values: Map<string, string>;
@@ -79,6 +79,17 @@ describe('durable practice recovery', () => {
     values.set('oral.sessions.v1', '{invalid');
     expect(() => saveSession(fresh())).toThrow();
     expect(values.get('oral.sessions.v1')).toBe('{invalid');
+  });
+  it('does not clear damaged history when deleting a selected record', () => {
+    values.set('oral.sessions.v1', '{invalid');
+    expect(() => deleteSessions(['selected'])).toThrow();
+    expect(values.get('oral.sessions.v1')).toBe('{invalid'); expect(storage.setItem).not.toHaveBeenCalled();
+  });
+  it('verifies deletion and preserves unselected drafts', () => {
+    const selected = saveSession(fresh()); const remaining = saveSession(fresh());
+    storage.setItem.mockImplementationOnce(() => {});
+    expect(() => deleteSessions([selected.id])).toThrow('SESSION_READBACK_MISMATCH');
+    deleteSessions([selected.id]); expect(getSessions()).toEqual([remaining]);
   });
   it('rejects a lost write instead of claiming saved', () => {
     storage.setItem.mockImplementation(() => {});

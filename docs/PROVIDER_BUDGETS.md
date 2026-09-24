@@ -29,3 +29,31 @@ Automated tests cover request ordering, rejection before provider calls, duplica
 Before enabling enforced mode, use a dedicated test namespace/database to verify concurrent duplicate requests, account/global/session limit boundaries, UTC rollover, Redis timeout, retries and ledger retention. Do not test against production user counters. No paid model is needed; mock provider responses.
 
 Protocol references: [Upstash REST command body](https://upstash.com/docs/redis/features/restapi#post-command-in-body), [Redis EVAL](https://redis.io/docs/latest/commands/eval/). The implementation uses an atomic script rather than a non-atomic REST pipeline.
+
+## Reproducible Redis check (manual, not run yet)
+
+`scripts/test-budget-redis.mjs` extracts the actual production Lua from `lib/ai/budget.ts`.
+It does not load `.env.local`, call models, or touch production key prefixes. The run
+uses a random Redis hash-tag namespace and deletes only its own enumerated keys.
+It makes approximately 150 Redis commands; use a dedicated test database. No new
+Redis service or credential has been created for this task.
+
+Offline, no network:
+
+```powershell
+node scripts/test-budget-redis.mjs --check
+```
+
+For the live check, manually supply `ORAL_REDIS_TEST_URL` and `ORAL_REDIS_TEST_TOKEN`
+as environment variables from the dedicated database. Do not paste credentials into
+logs or handoffs. Then:
+
+```powershell
+$env:ORAL_REDIS_TEST_ACK = 'isolated-test-database'
+node scripts/test-budget-redis.mjs --run
+```
+
+Twelve scenarios check concurrent duplicate ownership, all nine scope/metric limits,
+two-attempt accounting, and TTLs. Success here does not validate actual provider
+billing, UI, route/network timeouts, or UTC rollover key construction. Cleanup failure
+is a test failure; leftover reservation keys expire within seven days.

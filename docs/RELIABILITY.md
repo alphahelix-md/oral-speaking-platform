@@ -21,3 +21,11 @@ Rollback reference: deployed baseline `8eb03ab`. The old UI cannot recover the n
 
 
 Follow-up changes: save failures expose a JSON text/draft backup (audio is downloaded separately); manual text edits survive remaining STT chunks; pure-text, skipped/partial transcription and removed recordings have explicit states. Full or blocked preference/cache storage no longer prevents manual recovery. Production-enforced budget configuration is documented separately and is not needed to keep the existing explicitly unmetered test mode unchanged.
+
+Recording interruption follow-up: the recorder installs final-data/stop handlers at start,
+retains the completed result, and saves received original bytes after an unexpected end
+while the page remains alive. The user is asked to play/check the saved audio before
+requesting analysis. Error events are not treated as the end of data delivery; see the
+[W3C MediaStream Recording event sequence](https://www.w3.org/TR/mediastream-recording/).
+This does not make an OS-killed or force-closed active recording recoverable. Verify
+microphone interruption and navigation while permission is pending on real devices.

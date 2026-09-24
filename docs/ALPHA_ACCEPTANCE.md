@@ -6,6 +6,7 @@ This checklist is not a pass report. Automated tests cannot supply phone/device 
 | --- | --- | --- | --- |
 | Typed draft | Type and edit before submitting; refresh; choose Resume unfinished practice | Same question, exact edited text and Turn ID | Logic tests pass; device pending |
 | Original recording | Record 15–60 seconds; finish; refresh while transcription runs | Original readback verified; recoverable audio and text; no automatic repeated ambiguous request | Handler/storage tests pass; device pending |
+| System recording interruption | End microphone input while the page stays alive; also navigate while microphone permission is pending | Received original bytes are saved; prompt to play/check; no automatic STT of interrupted audio | Event/handler tests pass; device pending |
 | Long answer | Record 1–3 minutes; interrupt after an early successful chunk | Successful chunks remain; pending/uncertain state explicit; manual completion available | State tests pass; device pending |
 | Double submit | Tap Continue twice quickly; refresh during submission | One Turn; correct next question; editor cleared only after durable commit | Handler tests pass; device pending |
 | End with pending input | Type or record but do not submit; press Finish | Pending input is retained; finish requires submit/skip first | Handler tests pass; device pending |

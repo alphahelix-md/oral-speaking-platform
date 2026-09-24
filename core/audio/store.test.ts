@@ -46,7 +46,7 @@ describe('audio transaction completion', () => {
 });
 
 // Faithful transaction ordering with injected readback faults; no browser dependency.
-function memoryDatabase(fault?: 'missing' | 'bytes' | 'mime' | 'write' | 'read-abort') {
+function memoryDatabase(fault?: 'missing' | 'bytes' | 'mime' | 'write' | 'read-abort' | 'receipt') {
   const records = new Map<string, unknown>();
   const close = vi.fn();
   vi.stubGlobal('indexedDB', { open: () => {
@@ -60,6 +60,7 @@ function memoryDatabase(fault?: 'missing' | 'bytes' | 'mime' | 'write' | 'read-a
           queueMicrotask(() => {
             let value: any = records.get(key);
             if (fault === 'missing') value = undefined;
+            if (value && fault === 'receipt') value = value.blob;
             if (value && fault === 'bytes') value = { ...value, blob: new Blob(['corrupt'], { type: value.blob.type }) };
             if (value && fault === 'mime') value = { ...value, blob: new Blob(['rawdata'], { type: 'audio/mp4' }) };
             request.result = value; request.onsuccess?.();
@@ -89,7 +90,7 @@ describe('original recording verification', () => {
     expect(await (await getAudio('raw:wav'))!.text()).toBe('normalized');
     expect((records.get('raw') as any).metadata).toMatchObject({ kind: 'original', trainingConsent: false, turnId: 'turn' });
   });
-  it.each(['missing', 'bytes', 'mime'] as const)('rejects %s readback including same-size corruption', async fault => {
+  it.each(['missing', 'bytes', 'mime', 'receipt'] as const)('rejects %s readback including same-size corruption', async fault => {
     memoryDatabase(fault);
     await expect(saveOriginalAudio('raw', original(), metadata)).rejects.toThrow('AUDIO_READBACK_MISMATCH');
   });
