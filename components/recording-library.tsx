@@ -2,14 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { Download, Play, RotateCcw, Trash2, UploadCloud } from 'lucide-react';
-import { deleteAudio, listAudio, updateAudioMetadata, type AudioLibraryEntry, type AudioMetadata } from '@/core/audio/store';
+import { deleteAudio, getPlaybackAudio, listAudio, updateAudioMetadata, type AudioLibraryEntry, type AudioMetadata } from '@/core/audio/store';
 import { recordedAudioToWavChunks } from '@/core/audio/wav';
 import { speechErrors } from '@/lib/speech/ui-copy';
 import { getSupabaseAuthHeaders } from '@/lib/auth/supabase-browser';
 import type { Session } from '@/types/speaking';
 
 type UiLanguage = 'zh-CN' | 'en' | 'zh-HK' | 'ja';
-type Props = { sessions: Session[]; uiLanguage: UiLanguage; accessCode: string; onEditAccessCode: () => void; onDeleted: (id: string) => void };
+type Props = { onResume: (session: Session) => void; sessions: Session[]; uiLanguage: UiLanguage; accessCode: string; onEditAccessCode: () => void; onDeleted: (id: string) => void };
 
 const recoveryCopy = {
   'zh-CN': { retry: '重新转写', working: '转写中', editCode: '检查访问码', unknownLanguage: '无法确定这段旧录音的语言。', copied: '已复制', copy: '复制文字' },
@@ -46,7 +46,7 @@ function extension(type: string): string {
   return 'webm';
 }
 
-export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAccessCode, onDeleted }: Props) {
+export function RecordingLibrary({ onResume, sessions, uiLanguage, accessCode, onEditAccessCode, onDeleted }: Props) {
   const [entries, setEntries] = useState<AudioLibraryEntry[]>([]);
   const [selectedUrl, setSelectedUrl] = useState('');
   const [selectedId, setSelectedId] = useState('');
@@ -74,9 +74,9 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
 
   useEffect(() => () => { if (selectedUrl) URL.revokeObjectURL(selectedUrl); }, [selectedUrl]);
 
-  function play(entry: AudioLibraryEntry) {
-    setSelectedId(entry.id);
-    setSelectedUrl(URL.createObjectURL(entry.blob));
+  async function play(entry: AudioLibraryEntry) {
+    try { setSelectedId(entry.id); setSelectedUrl(URL.createObjectURL(await getPlaybackAudio(entry.id) || entry.blob)); }
+    catch { setError(t.unavailable); }
   }
 
   function download(entry: AudioLibraryEntry) {
@@ -105,6 +105,11 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
   }
 
   async function retryTranscription(entry: AudioLibraryEntry) {
+    if (entry.metadata?.kind === 'original') {
+      const owner = sessions.find(item => item.draft?.audioId === entry.id);
+      if (owner) onResume(owner);
+      return;
+    }
     const linked = linkedTurn(entry.id);
     const language = entry.metadata?.language || linked?.session.language;
     if (!language) { setError(recovery.unknownLanguage); return; }
@@ -166,18 +171,20 @@ export function RecordingLibrary({ sessions, uiLanguage, accessCode, onEditAcces
     {!loading && !entries.length && <p className="empty-copy recording-empty">{t.empty}</p>}
     <div className="recording-list">{entries.map(entry => {
       const linked = linkedTurn(entry.id);
+      const draftSession = sessions.find(item => item.draft?.audioId === entry.id);
+      const resumeLabel = uiLanguage === 'en' ? 'Resume practice' : uiLanguage === 'ja' ? '練習を再開' : uiLanguage === 'zh-HK' ? '恢復練習' : '恢复练习';
       const createdAt = entry.metadata?.createdAt || linked?.turn.createdAt;
       const question = entry.metadata?.question || linked?.turn.question || t.unknown;
       return <article className="recording-card" key={entry.id}>
         <span className="section-kicker">{createdAt ? new Date(createdAt).toLocaleString(uiLanguage) : t.unknown} · {entry.metadata?.durationSeconds || linked?.turn.durationSeconds || 0}s</span>
         <strong>{question}</strong>
-        <small>{entry.metadata?.transcript || linked?.turn.transcript || t.pending}</small>
+        <small>{draftSession?.draft?.transcript || entry.metadata?.transcript || linked?.turn.transcript || t.pending}</small>
         <span className="recording-size">{t.size}: {(entry.blob.size / 1024 / 1024).toFixed(2)} MB</span>
         <span className="recording-size">{entry.metadata?.trainingUploadedAt ? '☁ ' + trainingStateCopy[uiLanguage].cloudSaved : entry.metadata?.trainingUploadStatus === 'pending' ? trainingStateCopy[uiLanguage].uploading : entry.metadata?.trainingUploadStatus === 'failed' ? trainingStateCopy[uiLanguage].failed : trainingStateCopy[uiLanguage].localOnly}</span>
         <div className="turn-actions">
           <button onClick={() => play(entry)}><Play size={15} /> {t.play}</button>
           <button onClick={() => download(entry)}><Download size={15} /> {t.download}</button>
-          <button onClick={() => retryTranscription(entry)} disabled={Boolean(transcribingId)}><RotateCcw size={15} /> {transcribingId === entry.id ? recovery.working + ' ' + transcribingProgress : recovery.retry}</button>
+          {(entry.metadata?.kind !== 'original' || draftSession) && <button onClick={() => retryTranscription(entry)} disabled={Boolean(transcribingId)}><RotateCcw size={15} /> {entry.metadata?.kind === 'original' ? resumeLabel : transcribingId === entry.id ? recovery.working + ' ' + transcribingProgress : recovery.retry}</button>}
           <button onClick={() => remove(entry.id)} disabled={Boolean(transcribingId)}><Trash2 size={15} /> {t.delete}</button>
         </div>
         {(entry.metadata?.transcript || linked?.turn.transcript) && <button className="recording-copy" onClick={() => copyTranscript(entry.metadata?.transcript || linked?.turn.transcript || '', entry.id)}>{copiedId === entry.id ? recovery.copied : recovery.copy}</button>}

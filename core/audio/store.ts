@@ -2,6 +2,8 @@ const DB_NAME = 'oral-audio-v1';
 const STORE_NAME = 'records';
 
 export type AudioMetadata = {
+  kind?: 'original' | 'derived';
+  sha256?: string;
   createdAt: string;
   language?: 'en' | 'ja';
   mode?: string;
@@ -49,15 +51,53 @@ export async function saveAudio(id: string, audio: Blob, metadata?: Omit<AudioMe
   } finally { db.close(); }
 }
 
-export async function getAudio(id: string): Promise<Blob | undefined> {
+async function digest(audio: Blob): Promise<string> {
+  const hash = await crypto.subtle.digest('SHA-256', await audio.arrayBuffer());
+  return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function saveOriginalAudio(id: string, audio: Blob, metadata: Omit<AudioMetadata, 'trainingConsent'>): Promise<void> {
+  if (!audio.size) throw new Error('EMPTY_AUDIO');
+  const sha256 = await digest(audio);
+  await saveAudio(id, audio, { ...metadata, kind: 'original', sha256 });
+  const stored = await getAudio(id);
+  if (!stored || stored.size !== audio.size || stored.type !== audio.type || await digest(stored) !== sha256) {
+    throw new Error('AUDIO_READBACK_MISMATCH');
+  }
+}
+
+export async function getVerifiedAudio(id: string): Promise<Blob> {
+  const entry = await getAudioEntry(id);
+  if (!entry?.blob.size || !entry.metadata?.sha256 || await digest(entry.blob) !== entry.metadata.sha256) {
+    throw new Error('AUDIO_READBACK_MISMATCH');
+  }
+  return entry.blob;
+}
+
+export async function getAudioEntry(id: string): Promise<AudioLibraryEntry | undefined> {
   const db = await openDB();
   try {
-    return await new Promise<Blob | undefined>((resolve, reject) => {
-      const request = db.transaction(STORE_NAME).objectStore(STORE_NAME).get(id);
-      request.onsuccess = () => resolve(request.result ? unpack(id, request.result as StoredAudio).blob : undefined);
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME);
+      const request = tx.objectStore(STORE_NAME).get(id);
+      let entry: AudioLibraryEntry | undefined;
+      request.onsuccess = () => { entry = request.result ? unpack(id, request.result as StoredAudio) : undefined; };
       request.onerror = () => reject(request.error);
+      tx.oncomplete = () => resolve(entry);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error('AUDIO_TRANSACTION_ABORTED'));
     });
   } finally { db.close(); }
+}
+
+export async function getAudio(id: string): Promise<Blob | undefined> {
+  return (await getAudioEntry(id))?.blob;
+}
+
+export async function getPlaybackAudio(id: string): Promise<Blob | undefined> {
+  try { const derived = await getAudio(`${id}:wav`); if (derived?.size) return derived; }
+  catch { /* The optional playback cache must not hide the original. */ }
+  return getAudio(id);
 }
 
 export async function listAudio(): Promise<AudioLibraryEntry[]> {
@@ -70,7 +110,8 @@ export async function listAudio(): Promise<AudioLibraryEntry[]> {
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor) { resolve(entries); return; }
-        entries.push(unpack(String(cursor.key), cursor.value as StoredAudio));
+        const entry = unpack(String(cursor.key), cursor.value as StoredAudio);
+        if (entry.metadata?.kind !== 'derived') entries.push(entry);
         cursor.continue();
       };
       request.onerror = () => reject(request.error);
@@ -103,6 +144,7 @@ export async function deleteAudio(id: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       tx.objectStore(STORE_NAME).delete(id);
+      tx.objectStore(STORE_NAME).delete(`${id}:wav`);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error || new Error('AUDIO_TRANSACTION_ABORTED'));
@@ -117,7 +159,7 @@ export async function deleteAudioMany(ids: string[]): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      for (const id of new Set(ids)) store.delete(id);
+      for (const id of new Set(ids)) { store.delete(id); store.delete(`${id}:wav`); }
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error || new Error('AUDIO_TRANSACTION_ABORTED'));
