@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSession, speakingReducer } from '@/core/speaking/engine';
-import { commitDraft, evaluationKey, RequestNotSentError, transcribeDraft } from '@/core/session/recovery';
+import { commitDraft, evaluationKey, recoverSession, RequestNotSentError, transcribeDraft } from '@/core/session/recovery';
 import { getSessions, saveSession } from '@/core/session/storage';
 import { fetchJsonWithTimeout } from '@/lib/http/fetch-json';
 import { unavailableEvaluation } from '@/lib/ai/unavailable-review';
@@ -221,5 +221,60 @@ describe('saved recording playback failures', () => {
       await handler('playAudio', { getPlaybackAudio: vi.fn().mockResolvedValue(new Blob(['raw'])), setNotice: notice, extra: { playback: 'Playback unavailable' } })('raw');
       expect(revoke).toHaveBeenCalledOnce(); expect(notice).toHaveBeenCalledWith('Playback unavailable');
     } finally { revoke.mockRestore(); }
+  });
+});
+
+
+describe('interrupted draft recovery with question playback', () => {
+  function restoredDraft(text = '') {
+    const c = context();
+    c.ref.current.draft = { ...c.ref.current.draft!, audioId: 'raw', audioStatus: 'verified', transcript: text,
+      stage: 'transcribing', chunks: text ? [{ status: 'succeeded', text }, { status: 'running' }] : [{ status: 'running' }] };
+    c.env.persistSession(c.ref.current);
+    Object.assign(c.env, {
+      recording: false, sessionSaveFailed: false, audioSaveFailed: false,
+      getSessions, recoverSession, getPlaybackAudio: vi.fn().mockResolvedValue(new Blob(['playback'])),
+      recoveryText: { interrupted: 'Processing interrupted', empty: 'No transcript saved; keep audio or type', partial: 'Saved text retained; complete manually' },
+      questionAudioKey: () => 'question', questionAudioRequest: { current: { key: 'question', promise: Promise.resolve(new Blob(['question audio'])) } },
+      playingQuestionAudio: { current: null }, playingQuestionAudioUrl: { current: '' },
+      questionVoiceUnavailable: { en: 'Voice unavailable' }, questionVoiceFallback: { en: 'Local voice' },
+      questionVoicePreparing: { en: 'Preparing voice' }, selectLearningVoice: () => undefined,
+      languages: { en: { speechLocale: 'en-US' } },
+    });
+    for (const key of ['restoring', 'sessionState', 'language', 'mode', 'level', 'topic', 'questionAudioState', 'questionVoiceNotice']) {
+      c.env['set' + key[0].toUpperCase() + key.slice(1)] = (value: unknown) => { c.state[key] = value; };
+    }
+    return c;
+  }
+  it('explains an empty interrupted transcript and retains the notice after cloud autoplay', async () => {
+    const c = restoredDraft();
+    vi.stubGlobal('Audio', class { play = vi.fn().mockResolvedValue(undefined); });
+    await handler('openSession', c.env)(getSessions()[0]);
+    expect(c.state.notice).toBe(c.env.recoveryText.empty);
+    expect(c.state.transcript).toBe(''); expect(c.ref.current.draft?.chunks).toEqual([{ status: 'uncertain' }]);
+    await handler('speakQuestion', c.env)(c.ref.current, true);
+    expect(c.state.notice).toBe(c.env.recoveryText.empty);
+    expect(c.env.fetchJsonWithTimeout).not.toHaveBeenCalled();
+    c.env.playingQuestionAudio.current.onended();
+  });
+  it('retains saved partial text and the recovery notice during local question playback', async () => {
+    const c = restoredDraft('First saved chunk');
+    const speech = { getVoices: () => [], cancel: vi.fn(), resume: vi.fn(), speak: vi.fn() };
+    vi.stubGlobal('window', { speechSynthesis: speech }); vi.stubGlobal('speechSynthesis', speech);
+    vi.stubGlobal('SpeechSynthesisUtterance', class {});
+    await handler('openSession', c.env)(getSessions()[0]);
+    await handler('speakQuestionLocally', c.env)(c.ref.current);
+    expect(c.state.notice).toBe(c.env.recoveryText.partial);
+    expect(c.state.transcript).toBe('First saved chunk');
+    expect(getSessions()[0].draft?.transcript).toBe('First saved chunk');
+    expect(c.env.fetchJsonWithTimeout).not.toHaveBeenCalled();
+    expect(speech.speak).toHaveBeenCalledOnce();
+  });
+  it('does not claim the original is retained when verification fails', async () => {
+    const c = restoredDraft(); c.env.getVerifiedAudio.mockRejectedValue(new Error('Corrupt'));
+    await handler('openSession', c.env)(getSessions()[0]);
+    expect(c.state.audioSaveFailed).toBe(true);
+    expect(c.state.notice).toBe(c.env.recoveryText.interrupted);
+    expect(c.env.getPlaybackAudio).not.toHaveBeenCalled();
   });
 });
