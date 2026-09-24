@@ -1,3 +1,4 @@
+import { sessionWriteAccess } from '@/core/session/write-access';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSession, speakingReducer } from '@/core/speaking/engine';
 import { commitDraft, recoverSession, RequestNotSentError, transcribeDraft } from './recovery';
@@ -7,11 +8,12 @@ import type { AnswerDraft, Session } from '@/types/speaking';
 let values: Map<string, string>;
 let storage: { getItem: ReturnType<typeof vi.fn>; setItem: ReturnType<typeof vi.fn> };
 beforeEach(() => {
+  vi.spyOn(sessionWriteAccess, 'assert').mockImplementation(() => {});
   values = new Map();
   storage = { getItem: vi.fn((key: string) => values.get(key) || null), setItem: vi.fn((key: string, value: string) => values.set(key, value)) };
   vi.stubGlobal('localStorage', storage);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const fresh = () => createSession('en', 'daily', 'Intermediate', 'Food', 'What do you cook?');
 function reload(): Session { return recoverSession(JSON.parse(JSON.stringify(getSessions()[0]))); }
 

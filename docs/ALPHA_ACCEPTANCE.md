@@ -19,6 +19,7 @@ This checklist is not a pass report. Automated tests cannot supply phone/device 
 | Training upload failure | Opt in; fail upload | Local practice remains; upload failure is visible | Existing behavior; device pending |
 | Stalled response body | Return headers then stall STT/evaluation JSON; delay auth/Redis beyond deadline | Locks release; raw/text remain; no late provider call after cancellation | Client, budget and route fault tests pass; device pending |
 | Legacy recording retry | Resume old successful chunks; interrupt next request; refresh or open a second tab | Successful text retained; unknown requests blocked; play/download still available | Atomic metadata/recovery tests pass; device pending |
+| Simultaneous windows | Open this build in two windows; save in the first, close it, then continue in the second | One writer; blocked window cannot overwrite/delete; ownership transfers and latest records survive | Unit tests and 6 isolated Edge browser API checks pass; actual app/phone pending |
 | Server budgets | Dedicated Redis test backend; mock Provider | Atomic concurrent limits; duplicate rejected; each retry counted; failure stops paid work | Mock boundary tests pass; real Redis pending |
 
 Run the mobile rows on Android Chrome, iPhone Safari and desktop Chrome. Start with English. Mark Japanese separately until real language samples are available.
@@ -28,3 +29,11 @@ Per attempt, record: date, build SHA, device/browser, language, session identifi
 Keep denominators: unsuccessful attempts and export-only outcomes remain in the attempt count. Export-only is not retained-by-platform success. Fifty mixed-device attempts and three days without unresolved P0/P1 remain required; no such dataset exists yet.
 
 Browser automation issue: `scripts/test-reliability-browser.mjs` did not complete after two allowed retries. Its APIs are mocked; it must not be counted as full browser acceptance. Screenshots/errors are in `.codex/qa/reliability-1790214176581/`.
+
+## Single-writer rollout
+
+New clients use one origin-wide [Web Locks lease](https://w3c.github.io/web-locks/#termination-of-locks) for Session history writes. A second window waits until the first closes. Existing recordings remain available for playback/download while editing is blocked. Unsupported or denied locks fail closed; no best-effort concurrent history writes are permitted.
+
+After deployment, close older Oral tabs/PWA windows and open the new version. Old clients do not participate in this lock. Browser storage remains local; this does not add cross-device sync. Check refresh, closing the active window, closing a waiting window, and returning from browser back/forward on each target device. No phone compatibility claim is made from desktop API tests.
+
+Offline evidence collection and calculation: see `docs/qa/V0_EVIDENCE.md`. An empty template is intentionally not a passing report.

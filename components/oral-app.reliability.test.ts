@@ -1,3 +1,4 @@
+import { sessionWriteAccess } from '@/core/session/write-access';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,11 +23,12 @@ function handler(name: string, environment: Record<string, unknown>): (...args: 
 let values: Map<string, string>;
 let storage: { getItem: ReturnType<typeof vi.fn>; setItem: ReturnType<typeof vi.fn> };
 beforeEach(() => {
+  vi.spyOn(sessionWriteAccess, 'assert').mockImplementation(() => {});
   values = new Map();
   storage = { getItem: vi.fn((key: string) => values.get(key) || null), setItem: vi.fn((key: string, value: string) => values.set(key, value)) };
   vi.stubGlobal('localStorage', storage);
 });
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 function context(initial?: Session) {
   const session = initial || createSession('en', 'daily', 'Intermediate', 'Food', 'Question');
   const ref = { current: session };

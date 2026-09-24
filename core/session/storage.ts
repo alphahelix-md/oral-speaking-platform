@@ -1,7 +1,9 @@
+import { sessionWriteAccess } from './write-access';
 import type { Session } from '@/types/speaking';
 const KEY = 'oral.sessions.v1';
 export function getSessions(): Session[] { try { return readSessions(); } catch { return []; } }
 export function saveSession(session: Session): Session {
+  sessionWriteAccess.assert();
   // A stale tab must not replace a newer draft or a completed turn.
   const all = readSessions();
   const previous = all.find(item => item.id === session.id);
@@ -20,6 +22,7 @@ export function readSessions(): Session[] {
 export function deleteSessions(ids: string[]): void {
   const selected = new Set(ids);
   if (!selected.size) return;
+  sessionWriteAccess.assert();
   const value = JSON.stringify(readSessions().filter(session => !selected.has(session.id)));
   localStorage.setItem(KEY, value);
   if (localStorage.getItem(KEY) !== value) throw new Error('SESSION_READBACK_MISMATCH');

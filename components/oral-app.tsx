@@ -6,6 +6,7 @@ import { uiExtra, modeUi, topicUi, levelUi, scoreUi } from '@/lib/ui-translation
 import { modes } from '@/training/config';
 import { createDraft, createSession, speakingReducer } from '@/core/speaking/engine';
 import { deleteSessions, getSessions, getStats, readSessions, saveSession } from '@/core/session/storage';
+import { observeSessionWriteAccess, type SessionWriteStatus } from '@/core/session/write-access';
 import { commitDraft, evaluationKey, recoverSession, RequestNotSentError, transcribeDraft } from '@/core/session/recovery';
 import { fetchJsonWithTimeout } from '@/lib/http/fetch-json';
 import { readPreference, writePreference } from '@/core/session/preferences';
@@ -137,12 +138,14 @@ export function OralApp() {
   const [page, setPage] = useState<Page>('home'); const [language, setLanguage] = useState<LanguageId>('en'); const [mode, setMode] = useState<ModeId>('daily'); const [level, setLevel] = useState('Intermediate'); const [topic, setTopic] = useState('Everyday life');
   const [session, setSessionState] = useState<Session | null>(null);
   const sessionRef = useRef<Session | null>(null); const [sessions, setSessions] = useState<Session[]>([]); const [retryExamPart, setRetryExamPart] = useState<1 | 2 | 3 | undefined>(); const [recording, setRecording] = useState(false); const [paused, setPaused] = useState(false); const [seconds, setSeconds] = useState(0);
-  const [audio, setAudio] = useState<Blob | null>(null); const [audioUrl, setAudioUrl] = useState(''); const [transcript, setTranscript] = useState(''); const [notice, setNotice] = useState(''); const [busy, setBusy] = useState(false); const [tab, setTab] = useState<'all' | LanguageId>('all');
+  const [audio, setAudio] = useState<Blob | null>(null); const [audioUrl, setAudioUrl] = useState(''); const [transcript, setTranscript] = useState(''); const [notice, setNotice] = useState(''); const [operationBusy, setBusy] = useState(false); const [tab, setTab] = useState<'all' | LanguageId>('all');
   const [pendingAudioId, setPendingAudioId] = useState<string | null>(null); const [audioSaveFailed, setAudioSaveFailed] = useState(false);
   const [uiLanguage, setUiLanguage] = useState<UiLanguage>('en'); const [theme, setTheme] = useState<Theme>('light'); const [settingsOpen, setSettingsOpen] = useState(false); const [draftUiLanguage, setDraftUiLanguage] = useState<UiLanguage>('en'); const [draftTheme, setDraftTheme] = useState<Theme>('light'); const [accessCode, setAccessCode] = useState(''); const [draftAccessCode, setDraftAccessCode] = useState(''); const [questionBlurred, setQuestionBlurred] = useState(false);
   const [authOpen, setAuthOpen] = useState(false); const [authUser, setAuthUser] = useState<User | null>(null); const [authEmail, setAuthEmail] = useState(''); const [authBusy, setAuthBusy] = useState(false); const [authNotice, setAuthNotice] = useState('');
   const [trainingConsent, setTrainingConsent] = useState<TrainingConsent>('unset'); const [consentOpen, setConsentOpen] = useState(false); const [consentBusy, setConsentBusy] = useState(false);
   const [questionAudioState, setQuestionAudioState] = useState<'idle' | 'loading' | 'ready' | 'fallback'>('idle');
+  const [sessionWriteStatus, setSessionWriteStatus] = useState<SessionWriteStatus>('waiting');
+  const busy = operationBusy || sessionWriteStatus !== 'ready';
   const [sessionSaveFailed, setSessionSaveFailed] = useState(false);
   const [sessionSaveConflict, setSessionSaveConflict] = useState(false);
   const [quickFeedbackTurnId, setQuickFeedbackTurnId] = useState<string | null>(null);
@@ -155,7 +158,16 @@ export function OralApp() {
   const [audioMetrics, setAudioMetrics] = useState<AudioMetrics | null>(null); const [transcriptResult, setTranscriptResult] = useState<TranscriptResult | null>(null); const [processingStage, setProcessingStage] = useState('');
   const [speechDiagnostic, setSpeechDiagnostic] = useState<SpeechDiagnostic>({}); const speechRequestId = useRef(''); const speechRequestCount = useRef(0);
   const questionAudioRequest = useRef<{ key: string; promise: Promise<Blob> } | null>(null); const playingQuestionAudio = useRef<HTMLAudioElement | null>(null); const playingQuestionAudioUrl = useRef(''); const automaticallyReadQuestion = useRef('');
-  useEffect(() => { setSessions(getSessions()); }, []);
+  useEffect(() => {
+    const refresh = () => setSessions(getSessions());
+    refresh();
+    let release = () => {};
+    try { release = observeSessionWriteAccess(window, navigator.locks, status => { setSessionWriteStatus(status); if (status === 'ready') refresh(); }); }
+    catch { setSessionWriteStatus('unavailable'); }
+    const onStorage = (event: StorageEvent) => { if (event.key === 'oral.sessions.v1' || event.key === null) refresh(); };
+    window.addEventListener('storage', onStorage);
+    return () => { release(); window.removeEventListener('storage', onStorage); };
+  }, []);
   useEffect(() => { const savedLanguage = readPreference('oral-ui-language') as UiLanguage | null; const savedTheme = readPreference('oral-theme') as Theme | null; if (savedLanguage && uiCopy[savedLanguage]) setUiLanguage(savedLanguage); if (savedTheme === 'light' || savedTheme === 'dark') setTheme(savedTheme); setQuestionBlurred(readPreference('oral-question-blurred') === 'true'); }, []);
   useEffect(() => { setAccessCode(readPreference('oral-beta-access-code', 'sessionStorage') || ''); }, []);
 
@@ -703,6 +715,9 @@ export function OralApp() {
 
   return <div className={'app-shell ' + (questionBlurred ? 'questions-blurred' : '')}><div className="app-frame">
     {page !== 'speaking' && page !== 'result' && <header className="topbar"><div className="brand"><span className="brand-mark"><AudioLines size={20} strokeWidth={2.5} /></span><span>oral<span className="brand-dot">.</span></span></div><div className="topbar-tools"><span className="topbar-caption">{text.studio}</span></div></header>}
+    {sessionWriteStatus !== 'ready' && <div className="notice" role="status">{sessionWriteStatus === 'waiting'
+      ? { 'zh-CN': '正在等待练习窗口。若已在另一窗口打开 Oral，请先关闭那个窗口；这里会自动恢复。', en: 'Waiting for the practice window. If Oral is open in another window, close that window; this one will become ready automatically.', 'zh-HK': '正在等候練習視窗。若已在另一視窗開啟 Oral，請先關閉該視窗；這裏會自動恢復。', ja: '練習ウィンドウを待っています。別のウィンドウで Oral を開いている場合は閉じてください。この画面は自動的に再開します。' }[uiLanguage]
+      : { 'zh-CN': '此浏览器暂时无法安全保存练习。请用最新版 Chrome 或 Safari 打开本站；已有录音仍可播放或下载。', en: 'This browser cannot safely save practice right now. Open this site in an updated Chrome or Safari; existing recordings can still be played or downloaded.', 'zh-HK': '此瀏覽器暫時無法安全儲存練習。請用最新版 Chrome 或 Safari 開啟本站；已有錄音仍可播放或下載。', ja: 'このブラウザでは現在、安全に練習を保存できません。最新版の Chrome または Safari で開いてください。既存の録音は再生・ダウンロードできます。' }[uiLanguage]}</div>}
     {(sessionSaveFailed || audioSaveFailed) && session && <div className="notice" role="status"><button onClick={() => sessionRef.current && downloadPracticeBackup(sessionRef.current)}>{exportCopy[uiLanguage]}</button></div>}
     {sessionSaveFailed && <div className="notice" role="alert">{sessionSaveConflict ? conflictCopy[uiLanguage] : extra.saveFailed} <button disabled={sessionSaveConflict} onClick={() => {
       if (!session) return;
@@ -735,7 +750,7 @@ export function OralApp() {
       {page === 'profile' && <><div className="page-intro"><span className="section-kicker">{extra.yourSpace}</span><h1>{extra.personal}<br /><em>{extra.personalEm}</em></h1><p>{extra.localProfile}</p></div><div className="profile-card"><span className="profile-avatar"><UserRound size={28} /></span><div><strong>{authUser?.email || extra.guest}</strong><small>{authUser ? authCopy[uiLanguage].active : extra.noAccount}</small></div></div>{authUser && <section className="consent-status"><div><strong>{consentCopy[uiLanguage].section}</strong><small>{trainingConsent === 'training' ? consentCopy[uiLanguage].statusTraining : consentCopy[uiLanguage].statusLocal}</small></div><button onClick={() => setConsentOpen(true)}>{consentCopy[uiLanguage].change}</button></section>}<div className="section-head compact"><h2>{extra.languageProfiles}</h2></div>{(['en', 'ja'] as const).map(id => <div className="profile-language" key={id}><span className="recent-icon">{languages[id].flag}</span><span><strong>{studyName(id)}</strong><small>{getStats(sessions, id).sessions} {extra.deviceSessions}</small></span></div>)}<div className="info-note"><CircleHelp size={18} /><span>{extra.historyNote}</span></div><div className="section-head compact"><h2>{extra.about}</h2></div><p className="about-copy">{extra.aboutCopy}</p></>}
       {page === 'profile' && <button className="recent-card recording-entry" onClick={() => navigate('recordings')}><span className="recent-icon"><AudioLines size={21} /></span><span><strong>{text.recordings}</strong><small>{extra.historyNote}</small></span><ChevronRight size={18} /></button>}
       {page === 'profile' && <section className="profile-control-list"><button className="profile-control" onClick={() => setAuthOpen(true)}><span className="recent-icon">{authUser ? (authUser.email?.slice(0, 1).toUpperCase() || <UserRound size={17} />) : <LogIn size={19} />}</span><span><strong>{authUser ? profileControls[uiLanguage].accountSignedIn : profileControls[uiLanguage].account}</strong><small>{authUser?.email || profileControls[uiLanguage].accountHint}</small></span><ChevronRight size={18} /></button><button className="profile-control" onClick={openSettings}><span className="recent-icon"><Settings2 size={20} /></span><span><strong>{profileControls[uiLanguage].settings}</strong><small>{profileControls[uiLanguage].settingsHint}</small></span><ChevronRight size={18} /></button><button className={'profile-control listening-control ' + (questionBlurred ? 'selected' : '')} onClick={() => setQuestionBlurred(value => !value)}><span className="recent-icon"><Volume2 size={20} /></span><span><strong>{profileControls[uiLanguage].listening}</strong><small>{profileControls[uiLanguage].listeningHint}</small></span><b>{questionBlurred ? profileControls[uiLanguage].on : profileControls[uiLanguage].off}</b></button></section>}
-      {page === 'recordings' && <RecordingLibrary onResume={openSession} sessions={sessions} uiLanguage={uiLanguage} accessCode={accessCode} onEditAccessCode={openSettings} onDeleted={recordingDeleted} />}
+      {page === 'recordings' && <RecordingLibrary readOnly={sessionWriteStatus !== 'ready'} onResume={openSession} sessions={sessions} uiLanguage={uiLanguage} accessCode={accessCode} onEditAccessCode={openSettings} onDeleted={recordingDeleted} />}
       {page === 'unfinished' && <UnfinishedPracticeList sessions={unfinishedSessions} uiLanguage={uiLanguage} disabled={busy || restoring} onResume={openSession} />}
       {page === 'records' && <LearningRecordManager sessions={sessions} uiLanguage={uiLanguage} onOpen={openSession} onDelete={learningRecordsDeleted} />}
       {page === 'setup' && <p className="center-note recording-disclosure">{localRecordingDisclosure[uiLanguage]}</p>}

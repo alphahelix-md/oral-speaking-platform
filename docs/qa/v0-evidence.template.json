@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "targetBuild": "0000000",
+  "attempts": [],
+  "stabilityWindow": {
+    "startedAt": null,
+    "endedAt": null,
+    "p0p1Events": null,
+    "silentLosses": null,
+    "evidence": ""
+  },
+  "openP0P1": [
+    {
+      "id": "session-cross-tab-atomicity",
+      "remedy": "Single-writer protection implemented; complete actual app and phone multi-window acceptance before closing this issue."
+    }
+  ],
+  "faults": [],
+  "budget": {
+    "hardCap": {
+      "status": "pending",
+      "evidence": ""
+    },
+    "invoiceReconciliation": {
+      "status": "pending",
+      "evidence": ""
+    }
+  }
+}
